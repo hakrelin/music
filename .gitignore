@@ -1,0 +1,14 @@
+# 依赖
+node_modules/
+dist/
+
+# 本地产物
+*.log
+*.tgz
+shots/
+preview/
+live-build/
+
+# 系统
+.DS_Store
+Thumbs.db
