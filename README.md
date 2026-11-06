@@ -1,169 +1,180 @@
-# music —— 一起听歌吧（Jusic）二次开发：旧版 UI 增强 + 歌单导入
+# 茶与月色 · TEA & MOONLIGHT
 
-在官方 **jusic_serve_houses:5.1**（2024-11 构建）之上做的一层增强，**不改后端、不改它的打包产物**，
-用「静态资源挂载 + 运行时注入脚本」的方式加功能。线上已经在跑这套。
+> 在幻想乡，一起听一首歌。
 
-```
-浏览器（官方旧版 UI）
-  ├─ js/app.e615c8b3.js   官方打包产物，原样不动
-  ├─ js/plus.js           ← 本仓库 plus/jusic-plus.js，运行时注入的增强脚本
-  └─ /plus-api/tracks     ← nginx 反代到本仓库 plus/tracks_api.py（只读取歌单曲目）
-                                └→ jusicMusicApi:3000 /playlist/detail
-```
+「茶与月色」是 **一起听歌吧 / Jusic** 的完全重写版：一间线上点歌房，房间里所有人同步听同一首歌。
+前端从头重写为 Vue 3 SPA，后端换成 **Go 单二进制**（内嵌前端、原生 WebSocket），
+**不再依赖**官方 Java jar、Docker、SockJS/STOMP、Node 音乐服务。
+
+- 视觉：墨绿 / 米白 / 浅茶绿，宋体大标题，东方 Project 同人插画（见文末致谢）
+- 部署：一个二进制 + 一份配置 + systemd，没有容器
+
+![茶与月色 · 大厅](docs/screenshots/home.jpg)
+
+| 房间（桌面） | 移动端 |
+|---|---|
+| ![房间](docs/screenshots/room.jpg) | ![移动端](docs/screenshots/room-mobile.jpg) |
 
 ---
 
 ## 功能
 
-| 功能 | 位置 | 说明 |
-|---|---|---|
-| **昵称（全局自动）** | 顶栏右上角胶囊 | 首次进站自动生成 `游客XXXX`，存 localStorage，连上房间自动 `/setting/name`；点击可改，改完立刻同步 |
-| **导入歌单 → 点歌队列** | 顶栏「导入歌单」弹窗 | 关键词搜歌单 / 按用户昵称或用户ID查他的歌单 / 直接填歌单 ID → 取该歌单曲目，**逐首 `/music/pick` 进点歌队列**（不是默认列表） |
-| **批量点歌** | 同上 | 一次最多 20 首（后端队列上限 `PlaylistSize=23`），多歌单平均分配名额 |
-| **东方电台预设** | 弹窗底部 | 内置 6 个东方 Project 歌单，一键把曲目加进队列 |
-| **权限认证** | 弹窗顶部 | 房主 / 管理员口令 → `/auth/root`、`/auth/admin`；点歌不需要权限，清空队列需要 |
-| **快捷键** | 全局 | `空格` / `→` 投票切歌，`R` 重载当前 |
-| **播放自愈** | 后台无界面 | `http://` 音源自动升 `https://`、`error/stalled` 重试两次后自动切歌、9 秒无进度判卡死、提前预热下一首 |
+| 模块 | 内容 |
+|---|---|
+| 大厅 | 房间列表与在线人数、开房（可设密码）、常驻「东方电台」 |
+| 房间 | 同步播放（服务器时钟校准，偏差 ≤1.5s）、滚动歌词、点歌队列、投票切歌、点赞、音量、聊天（图片链接自动展开） |
+| 点歌 | 网易云搜索、歌单搜索、歌单 ID / 分享链接导入（单次最多 20 首批量加入）、东方电台预设 |
+| 管理 | 房主 / 管理员口令；置顶、删除、清空队列、强切、禁点歌 / 禁切歌、点赞模式、房间音量 |
+| 电台 | 服务端 DJ：队列不足自动从默认歌单补到 8 首，房间没人也一直放（不再需要常驻 bot） |
+| 体验 | 桌面 / 移动端自适应，移动端四栏切换；键盘可访问；减少动态效果适配 |
+
+---
+
+## 快速开始（本地，无需 cookie）
+
+依赖：**Go 1.25+**、**Node 20+**。
+
+```bash
+# 1. 构建前端并拷进 Go embed 目录
+npm --prefix web install
+npm --prefix web run build
+node scripts/copy-dist.mjs
+
+# 2. 编译单二进制
+go build -o bin/musicd ./server/cmd/musicd
+
+# 3. 跑起来
+./bin/musicd            # Windows PowerShell： .\bin\musicd.exe
+```
+
+打开 <http://127.0.0.1:8080>。
+
+没有网易云 cookie 时自动使用 **demo provider**：24 首演示曲目 + 程序合成的音频，
+界面、播放、同步、点歌、聊天全部可以完整体验。Windows 也可以直接 `.\build.ps1`，
+Linux/macOS 用 `make build`。
+
+### 开发模式
+
+```bash
+# 后端
+go run ./server/cmd/musicd            # :8080
+
+# 前端（Vite HMR，/api 自动反代到 :8080）
+npm --prefix web run dev              # :5173
+
+# 只想看 UI：不进后端，用内置 mock 数据
+VITE_MOCK=1 npm --prefix web run dev
+```
+
+---
+
+## 接真实的网易云
+
+在仓库根目录创建 `server/config.local.json`（**已在 .gitignore 中，不会入库**）：
+
+```json
+{
+  "neteaseCookie": "MUSIC_U=...; __csrf=...",
+  "provider": "auto"
+}
+```
+
+Cookie 获取：浏览器登录 <https://music.163.com> → DevTools → Application → Cookies →
+`https://music.163.com` → 复制 `MUSIC_U`（以及 `__csrf` 如果有）。
+`provider: "auto"` 时有 cookie 就用网易云（`wy`），没有就用 demo。
+VIP 账号才能拿到 320k 地址；普通账号/无版权曲目会在播放时被跳过并提示。
+
+也可以全部用环境变量覆盖：`MUSIC_HTTP_ADDR`、`MUSIC_NETEASE_COOKIE`、`MUSIC_PROVIDER`、
+`MUSIC_DATA_DIR`、`MUSIC_ROOT_PASSWORD`、`MUSIC_ADMIN_PASSWORD`、`MUSIC_LOG_LEVEL`、`MUSIC_CONFIG`。
+
+> 示例配置里的默认口令（`654321` / `123456`）部署前务必改掉。
+
+---
+
+## 部署（无 Docker）
+
+```bash
+# 1. 构建（本机交叉编译到 Linux）
+make build                       # 产物 bin/musicd
+#   或：GOOS=linux GOARCH=amd64 make build
+
+# 2. 服务器上
+useradd -r -s /usr/sbin/nologin -d /var/lib/musicd musicd
+install -m 0755 bin/musicd /usr/local/bin/musicd
+install -d -o musicd -g musicd /var/lib/musicd /etc/musicd
+install -m 0600 server/config.local.json /etc/musicd/config.json
+install -m 0644 deploy/musicd.service /etc/systemd/system/musicd.service
+systemctl daemon-reload && systemctl enable --now musicd
+
+# 3. nginx（关键：WebSocket 的 Upgrade 头 + 长 read_timeout）
+cp deploy/nginx.conf.example /etc/nginx/conf.d/music.conf
+# 改 server_name / 证书路径后：
+nginx -t && systemctl reload nginx
+```
+
+更新版本：替换 `/usr/local/bin/musicd` 后 `systemctl restart musicd`。
+**前端已经 embed 进二进制**，不需要单独发静态文件。
+
+---
+
+## 架构
+
+```
+浏览器（Vue 3 SPA）
+   │  HTTP /api/*            房间列表、开房、配置
+   │  WebSocket /api/ws      进入房间后的全部实时状态
+   ▼
+musicd（Go 单二进制，内嵌 web/dist）
+   ├─ hub        房间表、队列状态机、服务器时钟推进、投票/点赞、权限、电台 DJ
+   ├─ httpapi    REST + WS 升级 + 静态资源（SPA fallback）
+   └─ provider   wy = 网易云 weapi（纯标准库加密）/ demo = 内置演示曲目与合成音频
+```
+
+完整协议（HTTP 接口、WS 消息、数据模型、配置字段、验收清单）见
+[`docs/architecture.md`](docs/architecture.md)。
 
 ---
 
 ## 目录
 
 ```
-plus/jusic-plus.js     注入脚本（前端全部功能，17 KB 单文件，无构建）
-plus/tracks_api.py     歌单曲目接口（Python 3 标准库，无依赖）
-deploy/                部署脚本
-  deploy-inject.sh     把 plus.js 注入到挂载目录的 index.html
-  deploy-api.sh        安装 plus-api 服务（systemd）
-  patch-nginx.py       给所有 listen 443 的 server 块加 /plus-api/ 反代
-  rollback.sh          还原成纯官方静态
-bot/touhou-radio.js    东方电台常驻 bot（需改成"补队列"版本见 README 末尾）
-ui/                    官方前端源码（Vue2 + muse-ui，供参考/大改时用）
+web/                    Vue 3 + TS + Vite 前端（唯一前端真源）
+  src/styles/tokens.css 设计 token（与参考站同一套墨绿/米白/浅茶绿）
+  src/views/            大厅与房间
+  src/components/room/  播放器、歌词、队列、聊天、点歌面板、设置
+server/                 Go 后端
+  cmd/musicd/           入口
+  internal/hub/         房间与 WS 协议
+  internal/provider/    wy（网易云）与 demo
+  internal/webui/       前端 embed 产物（构建时拷入）
+docs/architecture.md    架构契约
+deploy/                 systemd unit / nginx 示例
+scripts/copy-dist.mjs   构建步骤：web/dist → server/internal/webui/dist
+Makefile / build.ps1    构建入口
+ui/ plus/ bot/          旧版实现（已停用，仅作参考）
+```
+
+### 测试
+
+```bash
+go test ./server/...           # 后端单测（含网易云在线测试，无网络会 skip）
+npm --prefix web run typecheck # 前端类型检查
+npm --prefix web run build     # 前端生产构建
 ```
 
 ---
 
-## 部署（目标机器上有 jusic 容器 + 宝塔 + nginx）
+## 旧版说明
 
-### 1. 把官方静态资源解出来做基底
-
-```bash
-docker cp jusicServeHouses:/app/jusic-serve.jar /tmp/live.jar
-mkdir -p /opt/jusic-live
-python3 - <<'PY'
-import zipfile, os
-z = zipfile.ZipFile('/tmp/live.jar'); p = 'BOOT-INF/classes/static/'
-for n in z.namelist():
-    if n.startswith(p) and not n.endswith('/'):
-        dst = os.path.join('/opt/jusic-live', n[len(p):])
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        open(dst, 'wb').write(z.read(n))
-PY
-```
-
-### 2. 准备挂载目录 + 注入脚本
-
-```bash
-rm -rf /opt/jusic-static/*
-cp -a /opt/jusic-live/. /opt/jusic-static/
-cp plus/jusic-plus.js /opt/jusic-static/js/plus.js
-python3 - <<'PY'
-p='/opt/jusic-static/index.html'
-h=open(p,encoding='utf-8').read()
-if 'js/plus.js' not in h:
-    h=h.replace('</body>','<script src="js/plus.js" defer></script>\n</body>',1)
-    open(p,'w',encoding='utf-8').write(h)
-PY
-```
-
-### 3. 给容器加挂载 + 静态目录指向
-
-`docker-compose.yml` 的 `service_jusicServeHouses`：
-
-```yaml
-    volumes:
-      - /opt/jusic-static:/app/static:ro
-    environment:
-      - SPRING_RESOURCES_STATIC_LOCATIONS=file:/app/static/
-```
-
-```bash
-docker compose up -d --force-recreate service_jusicServeHouses
-```
-
-### 4. 装歌单曲目接口
-
-```bash
-mkdir -p /opt/plus-api && cp plus/tracks_api.py /opt/plus-api/
-# systemd 单元见 deploy/deploy-api.sh，默认监听 127.0.0.1:18099
-bash deploy/deploy-api.sh
-```
-
-### 5. nginx 反代（两个域名 + IP 的 443 块都要加）
-
-```bash
-python3 deploy/patch-nginx.py && nginx -t && systemctl reload nginx
-```
-
-```nginx
-location /plus-api/ {
-    proxy_pass http://127.0.0.1:18099/;
-    proxy_set_header Host $host;
-    proxy_read_timeout 30s;
-}
-```
+仓库里的 `ui/`、`plus/`、`bot/` 是上一代实现：官方 Vue2 界面 + 运行时注入脚本 + Java jar + Docker。
+新版已经在功能上完全覆盖（并补上了原来需要常驻 bot 的东方电台），这些目录保留仅作参考，**不再部署**。
 
 ---
 
-## 后端接口备忘（照这个写就不会踩坑）
+## 致谢与声明
 
-| 操作 | 指令 | 报文 |
-|---|---|---|
-| 点歌 | `/music/pick` | `{name, id, source:"wy", quality:"320k", sendTime}` |
-| 搜歌单 | `/music/searchsonglist` | `{name:<关键词>, source:"wy", pageIndex:1, pageSize:10}` |
-| 按用户查他的歌单 | `/music/searchsonglist` | `{name:<用户ID>, source:"wy_user", pageIndex:1, pageSize:10}` |
-| 搜用户 | `/music/searchuser` | `{nickname:<昵称>, source:"wy", pageIndex:1, pageSize:10}` |
-| 房主认证 | `/auth/root` | `{password}` |
-| 清空点歌队列 | `/music/clear` | 空 |
-| 默认列表（本仓库不用） | `/music/setDefaultPlaylist` | `{id:"歌单ID,逗号分隔", source:"wy"}` |
-
-**四个必须知道的坑**
-
-1. `source` 只能是 **`wy`**（不是 `netease`），写成 `netease` 会让后端 `setDefaultPlaylist` 抛 NPE。
-2. 分页字段是 **`pageIndex`**，不是 `page`。
-3. 队列上限 `PlaylistSize=23`（compose 里配的），超了后端直接拒。
-4. `GET /house/search` 返回 **401**，旧 jar 只映射了 **POST**。
-
-结果通过 SockJS 的裸消息下发，类型：`SEARCH_USER` / `SEARCH_SONGLIST` / `MUSIC` / `PICK` / `NOTICE`。
-旧版 store 里已经存好了（`getSearchDataUser` / `getSearchDataGd`），直接读 store 比钩 `onmessage` 稳。
-
----
-
-## 已知坑（部署侧）
-
-- 旧 jar 的 Spring Security 白名单只放行 `/js/** /css/** /img/** /index.html /favicon.ico`，
-  **放根目录的 `plus.js` 会 401**，必须放 `js/` 下。
-- SockJS **不能带 `?houseId=`**，query 会被拼进路径导致握手失败；进房间走连上默认房后再发 STOMP `/house/enter`。
-- 容器 bind mount 的目录**不能 `rm -rf` 重建**（inode 换掉后容器看不到新文件），只能清空内容再拷。
-- 8899 端口常被宝塔占，plus-api 用 18099。
-
----
-
-## 协议声明
-
-本项目只做**界面增强与播放入口整理**，不含任何音乐文件，也不破解任何付费内容。
-播放地址由部署方自己的 jusic 后端提供，登录态（网易云 cookie）属于部署方本人。
-
----
-
-## 待办：东方电台 24h 常驻
-
-`bot/touhou-radio.js` 现在还是按「默认列表」写的旧版。正确的做法是：
-
-```
-每 30 秒检查一次队列长度（store.getPlayerPick / 或后端 playlistSize）
-低于 5 首时，从 /plus-api/tracks 取东方歌单曲目，逐首 /music/pick 补到 ~20 首
-同时保持一个 WS 连接（房间没人 20 秒会被回收）
-```
-
-欢迎 PR。
+- 首屏 / 夜色 / 暮色插画来自 Pixiv 作者 **うさほり**、**みるるん**、**みふる**，
+  版权归原作者所有，本站仅作视觉呈现；如需商用请另行取得授权。
+- 东方 Project 二次创作，非官方粉丝站点。
+- 歌曲、封面与歌词来自网易云音乐，版权归各自权利人；本项目**不含任何音乐文件**，
+  也不破解付费内容，播放地址由部署方自己的账号凭据获取。

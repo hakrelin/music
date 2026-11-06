@@ -1,13 +1,21 @@
 # 依赖
 node_modules/
 dist/
+web/dist/
+server/internal/webui/dist/*
+!server/internal/webui/dist/.gitkeep
 
 # 本地产物
+bin/
 *.log
 *.tgz
 shots/
 preview/
 live-build/
+
+# 本地配置（含 cookie / 口令，禁止入库）
+server/config.local.json
+server/config.local.*.json
 
 # 系统
 .DS_Store

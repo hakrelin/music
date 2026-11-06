@@ -1,0 +1,30 @@
+[Unit]
+Description=Tea & Moonlight (茶与月色) music room server
+Documentation=https://github.com/hakrelin/music
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=musicd
+Group=musicd
+WorkingDirectory=/var/lib/musicd
+Environment=MUSIC_CONFIG=/etc/musicd/config.json
+ExecStart=/usr/local/bin/musicd
+Restart=on-failure
+RestartSec=3
+# 让 Go 运行时在容器/受限环境里也保持合理并发
+LimitNOFILE=65535
+
+# 加固（可按需放宽）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/musicd
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

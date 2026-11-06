@@ -1,0 +1,28 @@
+{
+  "httpAddr": ":8080",
+  "provider": "auto",
+  "neteaseCookie": "",
+  "site": {
+    "name": "茶与月色",
+    "tagline": "在幻想乡，一起听一首歌"
+  },
+  "rootPassword": "654321",
+  "adminPassword": "123456",
+  "radioRooms": [
+    {
+      "name": "东方电台",
+      "desc": "24 小时东方 Project，不间断",
+      "playlists": [
+        "2416955681",
+        "406607901",
+        "977204775",
+        "434256234",
+        "829520066",
+        "2824632945"
+      ]
+    }
+  ],
+  "roomIdleMinutes": 10,
+  "voteSkipRatio": 0.3,
+  "logLevel": "info"
+}
