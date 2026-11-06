@@ -5,6 +5,8 @@ const audio = new Audio();
 audio.preload = 'auto';
 
 const STORE_VOLUME = 'yue.volume';
+let retryTimer = 0;
+let loadVersion = 0;
 
 export const usePlayerStore = defineStore('player', {
   state: () => ({
@@ -28,14 +30,12 @@ export const usePlayerStore = defineStore('player', {
     _inited: false,
     _retries: 0,
   }),
-  getters: {
-    /** 服务器时间轴上的应播位置（秒）。 */
-    targetTime(s): number {
-      if (!s.startedAt) return 0;
-      return Math.max(0, (Date.now() + s.offset - s.startedAt) / 1000);
-    },
-  },
   actions: {
+    /** Read wall-clock time on each call; a computed getter would cache Date.now(). */
+    targetTime(): number {
+      if (!this.startedAt) return 0;
+      return Math.max(0, (Date.now() + this.offset - this.startedAt) / 1000);
+    },
     init() {
       if (this._inited) return;
       this._inited = true;
@@ -46,7 +46,7 @@ export const usePlayerStore = defineStore('player', {
       });
       audio.addEventListener('loadedmetadata', () => {
         this.duration = Number.isFinite(audio.duration) ? audio.duration : 0;
-        this.seekToTarget();
+        this.seekToTarget(true);
       });
       audio.addEventListener('play', () => {
         this.playing = true;
@@ -56,20 +56,30 @@ export const usePlayerStore = defineStore('player', {
         this.playing = false;
       });
       audio.addEventListener('error', () => {
-        if (!audio.src) return;
-        if (this._retries < 2) {
-          this._retries += 1;
-          window.setTimeout(() => void this.play(), 600);
-        } else {
+        if (!audio.getAttribute('src')) return;
+        this.loading = false;
+        this.blocked = false;
+        window.clearTimeout(retryTimer);
+        if (this._retries >= 2) {
           this.failed = true;
-          this.loading = false;
+          return;
         }
+        this._retries += 1;
+        const version = loadVersion;
+        retryTimer = window.setTimeout(() => {
+          retryTimer = 0;
+          if (version !== loadVersion || !audio.getAttribute('src')) return;
+          this.loading = true;
+          audio.load();
+          void this.play();
+        }, 600 * this._retries);
       });
       audio.addEventListener('waiting', () => {
         this.loading = true;
       });
       audio.addEventListener('playing', () => {
         this.loading = false;
+        this.failed = false;
       });
       audio.addEventListener('canplay', () => {
         this.ready = true;
@@ -79,6 +89,9 @@ export const usePlayerStore = defineStore('player', {
     },
     load(track: Track | null, startedAt: number, offset: number, autoPlay = true) {
       this.init();
+      window.clearTimeout(retryTimer);
+      retryTimer = 0;
+      loadVersion += 1;
       this.startedAt = startedAt;
       this.offset = offset;
       this._retries = 0;
@@ -95,8 +108,8 @@ export const usePlayerStore = defineStore('player', {
         this.blocked = false;
         return;
       }
-      if (track.id === this.trackId && audio.src) {
-        this.seekToTarget();
+      if (track.id === this.trackId && audio.getAttribute('src') === track.url) {
+        this.seekToTarget(true);
         if (autoPlay && audio.paused) void this.play();
         return;
       }
@@ -108,27 +121,42 @@ export const usePlayerStore = defineStore('player', {
     },
     async play(): Promise<void> {
       this.init();
-      if (!audio.src) return;
+      if (!audio.getAttribute('src')) return;
+      const version = loadVersion;
       try {
         await audio.play();
-        this.blocked = false;
-      } catch {
-        this.blocked = true;
+        if (version === loadVersion) this.blocked = false;
+      } catch (error) {
+        if (version !== loadVersion) return;
+        const name = error instanceof Error ? error.name : '';
+        if (name === 'AbortError') return;
+        if (name === 'NotAllowedError') {
+          this.blocked = true;
+          this.loading = false;
+        } else if (!retryTimer && this._retries >= 2) {
+          this.failed = true;
+          this.loading = false;
+        }
       }
     },
     retry() {
+      window.clearTimeout(retryTimer);
+      retryTimer = 0;
+      loadVersion += 1;
       this._retries = 0;
       this.failed = false;
       audio.load();
       void this.play();
     },
     pause() {
+      window.clearTimeout(retryTimer);
+      retryTimer = 0;
       audio.pause();
     },
     toggle() {
       if (this.playing) this.pause();
       else {
-        this.seekToTarget();
+        this.seekToTarget(true);
         void this.play();
       }
     },
@@ -153,9 +181,12 @@ export const usePlayerStore = defineStore('player', {
       }
     },
     /** 按服务器时间轴校正进度；偏差超过 1.5s 才 seek，避免频繁跳。 */
-    seekToTarget() {
-      if (!audio.src || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
-      const target = Math.min(this.targetTime, audio.duration - 0.5);
+    seekToTarget(force = false) {
+      if (!audio.src || !Number.isFinite(audio.duration) || audio.duration <= 0 || audio.seeking)
+        return;
+      // Do not interrupt an in-flight seek or chase the clock while the network is buffering.
+      if (!force && audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
+      const target = Math.min(this.targetTime(), audio.duration - 0.5);
       if (target < 0) return;
       if (Math.abs(audio.currentTime - target) > 1.5) {
         try {

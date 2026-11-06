@@ -12,6 +12,8 @@
 | --- | --- |
 | ![听歌房](docs/screenshots/room.jpg) | ![手机听歌房](docs/screenshots/room-mobile.jpg) |
 
+播放缓冲、直连音源与 1 Mbps 部署建议见 [排查与修复说明](docs/playback-buffering.md)。
+
 ## 界面与功能
 
 - 大厅第一屏直接展示常驻电台；房间可按类型筛选、按名称或当前歌曲搜索。

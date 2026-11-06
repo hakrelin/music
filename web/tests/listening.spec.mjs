@@ -27,6 +27,17 @@ async function observeAudio(page) {
     };
   });
 }
+async function ensurePlaying(page) {
+  await expect.poll(() => page.evaluate(() => !!window.__testAudio.getAttribute('src'))).toBe(true);
+  // Play is idempotent; locating a toggle by its changing label races with autoplay.
+  await page.evaluate(async () => {
+    const player = document
+      .querySelector('#app')
+      .__vue_app__.config.globalProperties.$pinia._s.get('player');
+    await player.play();
+  });
+  await expect.poll(() => page.evaluate(() => window.__testAudio.paused)).toBe(false);
+}
 test('大厅显示真实房间，分类、搜索及创建入口可用', async ({ page }) => {
   await page.goto('/');
   await expect(page).toHaveTitle('茶与金平糖 · 一起听');
@@ -113,10 +124,7 @@ test('手机切换面板时持续播放，320/390/768 像素下不横向溢出',
   await page.getByRole('button', { name: '搜索音乐', exact: true }).click();
   await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
   await page.keyboard.press('Escape');
-  if (await page.getByRole('button', { name: '开始收听', exact: true }).isVisible())
-    await page.getByRole('button', { name: '开始收听', exact: true }).click();
-  else if (await page.getByRole('button', { name: '开始同步收听', exact: true }).isVisible())
-    await page.getByRole('button', { name: '开始同步收听', exact: true }).click();
+  await ensurePlaying(page);
   await expect.poll(() => page.evaluate(() => window.__testAudio.paused)).toBe(false);
   await page.getByRole('button', { name: '聊天', exact: true }).click();
   await expect(page.getByLabel('聊天消息', { exact: true })).toBeVisible();
@@ -190,10 +198,7 @@ test('音量为零能保存，暂停后恢复同步，同曲重播能回到开�
   await page.reload();
   await expect(page.locator('.room-gate')).toHaveCount(0);
   await expect(page.getByRole('slider', { name: '音量', exact: true })).toHaveValue('0');
-  if (await page.getByRole('button', { name: '开始收听', exact: true }).isVisible())
-    await page.getByRole('button', { name: '开始收听', exact: true }).click();
-  else if (await page.getByRole('button', { name: '开始同步收听', exact: true }).isVisible())
-    await page.getByRole('button', { name: '开始同步收听', exact: true }).click();
+  await ensurePlaying(page);
   await expect.poll(() => page.evaluate(() => window.__testAudio.currentTime)).toBeGreaterThan(2.1);
   await page.getByTitle('投票切换到下一首', { exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__testAudio.currentTime)).toBeLessThan(1.6);
@@ -201,4 +206,65 @@ test('音量为零能保存，暂停后恢复同步，同曲重播能回到开�
   expect(await page.evaluate(() => window.__testAudio.paused)).toBe(true);
   await page.getByRole('button', { name: '开始同步收听', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__testAudio.paused)).toBe(false);
+});
+
+test('连续跨过三个同步周期仍持续前进，不回跳到入房时间', async ({ page, request }) => {
+  const id = await create(request, '连续播放回归');
+  await observeAudio(page);
+  await joined(page, id);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  await cdp.send('Network.emulateNetworkConditions', {
+    offline: false,
+    latency: 120,
+    downloadThroughput: 125000,
+    uploadThroughput: 125000,
+  });
+  await search(page);
+  await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await ensurePlaying(page);
+  await expect.poll(() => page.evaluate(() => window.__testAudio.currentTime)).toBeGreaterThan(0.1);
+  let previous = await page.evaluate(() => window.__testAudio.currentTime);
+  for (let cycle = 0; cycle < 3; cycle++) {
+    // This real-time wait crosses the 5-second correction timer while native audio keeps playing.
+    await page.waitForTimeout(5200);
+    const sample = await page.evaluate(() => {
+      const a = window.__testAudio;
+      const p = document
+        .querySelector('#app')
+        .__vue_app__.config.globalProperties.$pinia._s.get('player');
+      return {
+        time: a.currentTime,
+        target: (Date.now() + p.offset - p.startedAt) / 1000,
+        paused: a.paused,
+      };
+    });
+    expect(sample.paused).toBe(false);
+    expect(sample.time - previous).toBeGreaterThan(4.1);
+    expect(Math.abs(sample.time - sample.target)).toBeLessThan(1.6);
+    previous = sample.time;
+  }
+});
+
+test('音源失败会重新加载，网络错误不会冒充自动播放被阻止', async ({ page, request }) => {
+  const id = await create(request, '音源重试回归');
+  await observeAudio(page);
+  let failures = 0;
+  await page.route('**/api/demo/audio/**', async (route) => {
+    if (failures++ === 0) await route.fulfill({ status: 503, body: 'temporarily unavailable' });
+    else await route.continue();
+  });
+  await joined(page, id);
+  await search(page);
+  await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
+  await page.keyboard.press('Escape');
+  // Browser gesture unlocks audio; a failed response must then be reloaded automatically.
+  await ensurePlaying(page);
+  await expect
+    .poll(() => page.evaluate(() => window.__testAudio.currentTime), { timeout: 12000 })
+    .toBeGreaterThan(0.1);
+  expect(failures).toBeGreaterThan(1);
+  await expect(page.getByText('浏览器需要你点击一次，才能开始播放。')).toHaveCount(0);
+  await expect(page.locator('.play-notice.failed')).toHaveCount(0);
 });

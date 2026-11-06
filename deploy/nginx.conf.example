@@ -24,6 +24,13 @@ server {
     ssl_certificate     /etc/letsencrypt/live/music.tea-kompeito.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/music.tea-kompeito.com/privkey.pem;
 
+    # Compress text assets on low-bandwidth origins; audio still goes directly to its CDN.
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_comp_level 5;
+    gzip_types text/css text/javascript application/javascript application/json image/svg+xml;
+
     # 音频/封面来自网易云 CDN，与本站无关；这里只反代 API + 页面 + WS
     client_max_body_size 4m;
 
