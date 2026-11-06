@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import type { Track } from '@/types';
+import { fallbackMediaUrl } from '@/utils/media';
 
 const audio = new Audio();
 audio.preload = 'auto';
@@ -70,6 +71,8 @@ export const usePlayerStore = defineStore('player', {
           retryTimer = 0;
           if (version !== loadVersion || !audio.getAttribute('src')) return;
           this.loading = true;
+          const fallback = fallbackMediaUrl(audio.src);
+          if (fallback) audio.src = fallback;
           audio.load();
           void this.play();
         }, 600 * this._retries);

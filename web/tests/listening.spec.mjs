@@ -268,3 +268,50 @@ test('音源失败会重新加载，网络错误不会冒充自动播放被阻�
   await expect(page.getByText('浏览器需要你点击一次，才能开始播放。')).toHaveCount(0);
   await expect(page.locator('.play-notice.failed')).toHaveCount(0);
 });
+
+test('网易云节点 403 时改连等价 CDN，保留签名路径且恢复播放', async ({ page, request }) => {
+  const id = await create(request, 'CDN 重试回归');
+  const sample = await request.get('/api/demo/audio/d19.wav');
+  expect(sample.ok()).toBeTruthy();
+  const audioBody = await sample.body();
+  const hosts = [];
+  await page.route('https://m704.music.126.net/**', async (route) => {
+    hosts.push('m704');
+    await route.fulfill({ status: 403, contentType: 'text/html', body: 'Forbidden' });
+  });
+  await page.route('https://m701.music.126.net/**', async (route) => {
+    hosts.push('m701');
+    await route.fulfill({ status: 200, contentType: 'audio/wav', body: audioBody });
+  });
+  await observeAudio(page);
+  await joined(page, id);
+  await page.getByRole('button', { name: '房间设置', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => {
+    const pinia = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia;
+    const p = pinia._s.get('player');
+    p.load(
+      {
+        id: 'cdn-test',
+        source: 'wy',
+        name: 'CDN test',
+        artist: '',
+        album: '',
+        cover: '',
+        duration: 32,
+        fee: 0,
+        url: 'https://m704.music.126.net/20990101/signature/jdymusic/obj/test.mp3?token=preserved',
+      },
+      Date.now(),
+      0,
+      true,
+    );
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.__testAudio.currentTime), { timeout: 10000 })
+    .toBeGreaterThan(0.1);
+  expect(hosts).toEqual(['m704', 'm701']);
+  expect(await page.evaluate(() => window.__testAudio.getAttribute('src'))).toBe(
+    'https://m701.music.126.net/20990101/signature/jdymusic/obj/test.mp3?token=preserved',
+  );
+});
