@@ -1,60 +1,63 @@
 <script setup lang="ts">
 import { useUiStore } from '@/stores/ui';
-
 const ui = useUiStore();
 </script>
-
 <template>
-  <div class="toast-host" aria-live="polite">
-    <transition-group name="toast">
-      <div v-for="t in ui.toasts" :key="t.id" class="toast" :class="t.kind" @click="ui.dismiss(t.id)">
-        {{ t.text }}
-      </div>
-    </transition-group>
-  </div>
+  <Teleport to="body"
+    ><div class="toasts" aria-live="polite">
+      <TransitionGroup name="toast"
+        ><div v-for="t in ui.toasts" :key="t.id" class="toast" :class="t.kind">
+          {{ t.text }}
+        </div></TransitionGroup
+      >
+    </div></Teleport
+  >
 </template>
-
 <style scoped>
-.toast-host {
+.toasts {
   position: fixed;
-  left: 50%;
-  bottom: 34px;
-  transform: translateX(-50%);
-  z-index: 90;
+  right: 24px;
+  bottom: 125px;
+  z-index: 100;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 10px;
+  gap: 8px;
   pointer-events: none;
+  max-width: calc(100vw - 48px);
 }
 .toast {
-  pointer-events: auto;
-  max-width: min(560px, 86vw);
-  padding: 11px 20px;
-  border-radius: 999px;
-  background: rgba(20, 58, 49, 0.94);
-  color: #f2f6e9;
-  font-size: 13px;
-  letter-spacing: 0.02em;
-  box-shadow: 0 16px 40px rgba(12, 36, 31, 0.28);
-  backdrop-filter: blur(8px);
-}
-.toast.ok {
-  background: rgba(31, 75, 60, 0.95);
-}
-.toast.warn {
-  background: rgba(138, 106, 44, 0.95);
+  padding: 11px 18px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  color: var(--green);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .toast.error {
-  background: rgba(150, 58, 46, 0.95);
+  color: #b06555;
+  border-color: #eed1c5;
+}
+.toast.warn {
+  color: #a38336;
 }
 .toast-enter-active,
 .toast-leave-active {
-  transition: opacity 0.25s ease, transform 0.25s ease;
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
 }
 .toast-enter-from,
 .toast-leave-to {
   opacity: 0;
-  transform: translateY(10px);
+  transform: translateY(8px);
+}
+@media (max-width: 900px) {
+  .toasts {
+    bottom: 98px;
+    right: 18px;
+    max-width: calc(100vw - 36px);
+  }
 }
 </style>

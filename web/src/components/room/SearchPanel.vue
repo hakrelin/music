@@ -23,6 +23,7 @@ const pageSize = 8;
 const searched = ref(false);
 
 async function doSearch(reset = true) {
+  if (searching.value) return;
   const q = keyword.value.trim();
   if (!q) return ui.warn('先输入歌名或歌手');
   if (reset) page.value = 1;
@@ -132,10 +133,16 @@ function loadRadio(id: string) {
 
 <template>
   <section class="search card" aria-label="点歌与歌单">
-    <div class="tabs" role="tablist">
-      <button :class="{ on: tab === 'search' }" role="tab" @click="tab = 'search'">搜索点歌</button>
-      <button :class="{ on: tab === 'playlist' }" role="tab" @click="tab = 'playlist'">导入歌单</button>
-      <button :class="{ on: tab === 'radio' }" role="tab" @click="tab = 'radio'">东方电台</button>
+    <div class="tabs" aria-label="点歌方式">
+      <button :class="{ on: tab === 'search' }" type="button" @click="tab = 'search'">
+        搜索点歌
+      </button>
+      <button :class="{ on: tab === 'playlist' }" type="button" @click="tab = 'playlist'">
+        导入歌单
+      </button>
+      <button :class="{ on: tab === 'radio' }" type="button" @click="tab = 'radio'">
+        东方电台
+      </button>
     </div>
 
     <!-- 搜索点歌 -->
@@ -147,7 +154,13 @@ function loadRadio(id: string) {
           placeholder="歌名 / 歌手 / 专辑"
           @keydown.enter="doSearch()"
         />
-        <button class="go" type="button" :disabled="searching" @click="doSearch()">
+        <button
+          class="go"
+          type="button"
+          aria-label="搜索音乐"
+          :disabled="searching"
+          @click="doSearch()"
+        >
           <Icon name="search" :size="17" />
         </button>
       </div>
@@ -159,7 +172,9 @@ function loadRadio(id: string) {
         <li v-for="t in results" :key="t.id" class="track">
           <div class="t-main">
             <span class="t-name">{{ t.name }}</span>
-            <span class="t-sub">{{ t.artist }}<template v-if="t.album"> · 《{{ t.album }}》</template></span>
+            <span class="t-sub"
+              >{{ t.artist }}<template v-if="t.album"> · 《{{ t.album }}》</template></span
+            >
           </div>
           <span v-if="t.fee > 0" class="tag gold tiny">VIP</span>
           <button class="add" type="button" @click="pick(t)">点歌</button>
@@ -169,7 +184,9 @@ function loadRadio(id: string) {
       <div v-if="total > pageSize" class="pager">
         <button type="button" :disabled="page <= 1" @click="turnPage(-1)">上一页</button>
         <span>{{ page }} / {{ Math.ceil(total / pageSize) }}</span>
-        <button type="button" :disabled="page >= Math.ceil(total / pageSize)" @click="turnPage(1)">下一页</button>
+        <button type="button" :disabled="page >= Math.ceil(total / pageSize)" @click="turnPage(1)">
+          下一页
+        </button>
       </div>
     </div>
 
@@ -186,7 +203,13 @@ function loadRadio(id: string) {
           :placeholder="plMode === 'search' ? '歌单关键词，例如：东方原曲' : '歌单 ID 或 分享链接'"
           @keydown.enter="searchPlaylists()"
         />
-        <button class="go" type="button" :disabled="plLoading" @click="searchPlaylists()">
+        <button
+          class="go"
+          type="button"
+          aria-label="搜索歌单"
+          :disabled="plLoading"
+          @click="searchPlaylists()"
+        >
           <Icon name="search" :size="17" />
         </button>
       </div>
@@ -254,267 +277,234 @@ function loadRadio(id: string) {
 </template>
 
 <style scoped>
-.card {
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid var(--line-night);
-  border-radius: var(--r-l);
-  backdrop-filter: blur(10px);
-}
 .search {
-  padding: clamp(16px, 1.8vw, 22px);
+  color: var(--ink);
 }
 .tabs {
   display: flex;
-  gap: 4px;
-  padding: 3px;
-  background: rgba(0, 0, 0, 0.18);
-  border-radius: 999px;
-  margin-bottom: 14px;
+  gap: 22px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 20px;
 }
 .tabs button {
-  flex: 1;
-  height: 32px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  letter-spacing: 0.08em;
-  color: rgba(232, 239, 220, 0.55);
-  transition: background 0.2s ease, color 0.2s ease;
+  padding: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+  position: relative;
 }
 .tabs button.on {
-  background: rgba(226, 237, 186, 0.14);
-  color: var(--lime);
+  color: var(--green);
+  font-weight: 600;
 }
-.pane {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.tabs button.on:after {
+  content: '';
+  height: 3px;
+  background: var(--green);
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  border-radius: 3px;
 }
 .row {
   display: flex;
   gap: 8px;
 }
-.row .input {
-  height: 40px;
-  font-size: 12.5px;
-}
 .go {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--r-m);
-  background: var(--lime);
-  color: var(--deep);
+  width: 44px;
+  flex: none;
   display: grid;
   place-items: center;
-  flex: none;
-}
-.go:disabled {
-  opacity: 0.5;
+  background: var(--green);
+  color: #fff;
+  border-radius: 10px;
 }
 .state {
-  font-size: 11.5px;
-  color: rgba(232, 239, 220, 0.45);
-  padding: 10px 2px;
-  line-height: 1.8;
+  padding: 35px 6px;
+  font-size: 12px;
+  color: var(--muted);
 }
 .tracks {
-  display: flex;
-  flex-direction: column;
-  max-height: 292px;
-  overflow: auto;
+  margin-top: 17px;
 }
 .track {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-top: 1px solid var(--line-night);
-}
-.track:first-child {
-  border-top: 0;
+  gap: 9px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
 }
 .t-main {
-  min-width: 0;
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 .t-name {
-  font-size: 12.5px;
-  color: #e7eeda;
+  font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .t-sub {
-  font-size: 10.5px;
-  color: rgba(232, 239, 220, 0.4);
+  font-size: 11px;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tag.tiny {
-  font-size: 9px;
-  height: 18px;
-  padding: 0 7px;
-}
-.add {
-  flex: none;
-  height: 27px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid var(--line-night-strong);
-  color: rgba(232, 239, 220, 0.75);
+.add,
+.add-all {
+  padding: 5px 11px;
+  background: var(--sage);
+  color: var(--green);
+  border-radius: 7px;
   font-size: 11px;
-  transition: all 0.2s ease;
+  flex: none;
 }
-.add:hover:not(:disabled) {
-  border-color: var(--lime);
-  color: var(--lime);
+.add:hover,
+.add-all:hover {
+  background: var(--sage-2);
 }
-.add:disabled {
-  opacity: 0.4;
-  cursor: default;
+.tiny {
+  font-size: 9px;
+  min-height: 18px;
+  padding: 1px 5px;
 }
 .pager {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-top: 18px;
   font-size: 11px;
-  color: rgba(232, 239, 220, 0.45);
+  color: var(--muted);
 }
 .pager button {
-  font-size: 11px;
-  color: rgba(232, 239, 220, 0.6);
-  padding: 4px 8px;
-}
-.pager button:disabled {
-  opacity: 0.3;
+  padding: 5px;
 }
 .mode-switch {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+  margin-bottom: 13px;
 }
 .mode-switch button {
   font-size: 11px;
-  color: rgba(232, 239, 220, 0.45);
+  color: var(--muted);
   padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid transparent;
+  border-radius: 6px;
 }
-.mode-switch button.on {
-  color: var(--lime);
-  border-color: var(--line-night-strong);
+.mode-switch .on {
+  background: var(--paper-2);
+  color: var(--green);
 }
 .playlists {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 300px;
-  overflow: auto;
+  margin-top: 20px;
 }
 .pl {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px;
-  border-radius: var(--r-s);
-  background: rgba(255, 255, 255, 0.03);
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
   cursor: pointer;
-  transition: background 0.2s ease;
-}
-.pl:hover {
-  background: rgba(226, 237, 186, 0.08);
 }
 .pl img {
-  width: 38px;
-  height: 38px;
-  border-radius: var(--r-s);
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
   object-fit: cover;
 }
 .pl-main {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
-.pl-name {
-  font-size: 12px;
-  color: #e7eeda;
+.pl-name,
+.pl-sub {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.pl-name {
+  font-size: 13px;
+}
 .pl-sub {
-  font-size: 10.5px;
-  color: rgba(232, 239, 220, 0.4);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
 }
 .pl-head {
   display: flex;
+  gap: 12px;
   align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
+  margin-top: 20px;
 }
 .back {
   font-size: 11px;
-  color: rgba(232, 239, 220, 0.55);
+  color: var(--green);
 }
 .pl-title {
+  min-width: 0;
   flex: 1;
-  min-width: 140px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 .pl-title b {
-  font-size: 12.5px;
-  color: var(--lime);
+  display: block;
+  font-size: 13px;
 }
 .pl-title small {
-  font-size: 10.5px;
-  color: rgba(232, 239, 220, 0.4);
-}
-.add-all {
-  height: 30px;
-  padding: 0 12px;
-  border-radius: 999px;
-  background: rgba(226, 237, 186, 0.14);
-  color: var(--lime);
-  font-size: 11px;
+  font-size: 10px;
+  color: var(--muted);
 }
 .radio-desc {
-  font-size: 11.5px;
+  font-size: 12px;
+  color: var(--ink-soft);
   line-height: 1.9;
-  color: rgba(232, 239, 220, 0.5);
 }
 .presets {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  margin-top: 20px;
 }
 .preset {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 11px 12px;
-  border: 1px solid var(--line-night);
-  border-radius: var(--r-m);
+  padding: 14px;
+  background: var(--paper-2);
+  border-radius: 10px;
+  margin-bottom: 10px;
 }
 .preset b {
   display: block;
-  font-size: 12.5px;
-  color: #e7eeda;
-  margin-bottom: 2px;
+  font-size: 13px;
 }
 .preset small {
-  font-size: 10.5px;
-  color: rgba(232, 239, 220, 0.4);
+  font-size: 10px;
+  color: var(--muted);
 }
 .tip {
-  font-size: 10.5px;
-  color: rgba(232, 239, 220, 0.32);
-  line-height: 1.8;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 15px;
+}
+@media (max-width: 500px) {
+  .tabs {
+    gap: 18px;
+  }
+  .tabs button {
+    font-size: 12px;
+  }
+  .track {
+    gap: 7px;
+  }
+  .t-name {
+    font-size: 12px;
+  }
+  .pl-head {
+    gap: 10px;
+  }
+  .add-all {
+    margin-left: auto;
+  }
 }
 </style>

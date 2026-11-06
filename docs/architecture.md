@@ -1,4 +1,4 @@
-# 茶与月色 · 架构契约 v1
+# 茶与金平糖 · 架构契约 v1
 
 > 本站是「一起听歌吧 / Jusic」的彻底重写：Go 单二进制后端 + Vue3 SPA 前端。
 > **不再依赖** Java jar、Docker、SockJS/STOMP、Node 音乐服务。
@@ -200,7 +200,7 @@ type Provider interface {
   "httpAddr": ":8080",
   "provider": "auto",              // auto: 有 cookie 用 wy，否则 demo
   "neteaseCookie": "",
-  "site": { "name": "茶与月色", "tagline": "在幻想乡，一起听一首歌" },
+  "site": { "name": "茶与金平糖", "tagline": "和大家一起听歌" },
   "rootPassword": "654321",
   "adminPassword": "123456",
   "radioRooms": [

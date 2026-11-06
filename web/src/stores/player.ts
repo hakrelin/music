@@ -14,8 +14,9 @@ export const usePlayerStore = defineStore('player', {
     time: 0,
     duration: 0,
     volume: (() => {
-      const raw = Number(localStorage.getItem(STORE_VOLUME));
-      return Number.isFinite(raw) && raw > 0 ? Math.min(1, raw) : 0.7;
+      const saved = localStorage.getItem(STORE_VOLUME);
+      const raw = saved === null ? NaN : Number(saved);
+      return Number.isFinite(raw) && raw >= 0 ? Math.min(1, raw) : 0.7;
     })(),
     muted: false,
     blocked: false,
@@ -25,14 +26,14 @@ export const usePlayerStore = defineStore('player', {
     startedAt: 0,
     offset: 0,
     _inited: false,
-    _retries: 0
+    _retries: 0,
   }),
   getters: {
     /** 服务器时间轴上的应播位置（秒）。 */
     targetTime(s): number {
       if (!s.startedAt) return 0;
       return Math.max(0, (Date.now() + s.offset - s.startedAt) / 1000);
-    }
+    },
   },
   actions: {
     init() {
@@ -90,10 +91,13 @@ export const usePlayerStore = defineStore('player', {
         audio.load();
         this.trackId = '';
         this.playing = false;
+        this.loading = false;
+        this.blocked = false;
         return;
       }
       if (track.id === this.trackId && audio.src) {
         this.seekToTarget();
+        if (autoPlay && audio.paused) void this.play();
         return;
       }
       this.trackId = track.id;
@@ -112,12 +116,21 @@ export const usePlayerStore = defineStore('player', {
         this.blocked = true;
       }
     },
+    retry() {
+      this._retries = 0;
+      this.failed = false;
+      audio.load();
+      void this.play();
+    },
     pause() {
       audio.pause();
     },
     toggle() {
       if (this.playing) this.pause();
-      else void this.play();
+      else {
+        this.seekToTarget();
+        void this.play();
+      }
     },
     setVolume(v: number) {
       const vol = Math.max(0, Math.min(1, v));
@@ -143,7 +156,7 @@ export const usePlayerStore = defineStore('player', {
     seekToTarget() {
       if (!audio.src || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
       const target = Math.min(this.targetTime, audio.duration - 0.5);
-      if (target <= 0) return;
+      if (target < 0) return;
       if (Math.abs(audio.currentTime - target) > 1.5) {
         try {
           audio.currentTime = target;
@@ -156,6 +169,6 @@ export const usePlayerStore = defineStore('player', {
     sync(offset: number) {
       this.offset = offset;
       this.seekToTarget();
-    }
-  }
+    },
+  },
 });

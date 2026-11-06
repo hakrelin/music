@@ -1,22 +1,26 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { activeLyricIndex, type LyricLine } from '@/utils/lyric';
 
 const props = defineProps<{ lines: LyricLine[]; time: number }>();
 const box = ref<HTMLElement | null>(null);
 const active = computed(() => activeLyricIndex(props.lines, props.time));
 
-watch(active, async (idx) => {
-  if (idx < 0 || !box.value) return;
-  const el = box.value.querySelector<HTMLElement>(`[data-line="${idx}"]`);
-  if (!el) return;
+async function scrollActive() {
   await nextTick();
-  box.value.scrollTo({ top: el.offsetTop - box.value.clientHeight / 2 + el.clientHeight / 2, behavior: 'smooth' });
-});
+  const el = box.value?.querySelector<HTMLElement>('[data-line="' + active.value + '"]');
+  if (!el || !box.value) return;
+  box.value.scrollTo({
+    top: el.offsetTop - box.value.clientHeight / 2 + el.clientHeight / 2,
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+  });
+}
+watch([active, () => props.lines], scrollActive);
+onMounted(scrollActive);
 </script>
 
 <template>
-  <div ref="box" class="lyrics" aria-label="歌词">
+  <div ref="box" class="lyrics" tabindex="0" aria-label="歌词">
     <p v-if="!lines.length" class="empty">这一首暂时没有歌词，就听旋律吧。</p>
     <p
       v-for="(line, i) in lines"
@@ -33,34 +37,32 @@ watch(active, async (idx) => {
 <style scoped>
 .lyrics {
   height: 100%;
-  overflow: hidden;
+  overflow: auto;
   position: relative;
-  mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 82%, transparent 100%);
   scrollbar-width: none;
+  mask-image: linear-gradient(180deg, transparent, #000 20%, #000 80%, transparent);
 }
 .lyrics::-webkit-scrollbar {
   display: none;
 }
-.empty {
-  padding: 18px 0;
-  font-size: 12.5px;
-  color: rgba(232, 239, 220, 0.5);
-}
 .line {
-  padding: 7px 0;
-  font-size: 13.5px;
-  line-height: 1.7;
-  color: rgba(232, 239, 220, 0.42);
-  transition: color 0.35s ease, transform 0.35s ease;
+  padding: 8px 5px;
+  font-size: 13px;
+  color: #676d61;
+  line-height: 1.8;
+  transition: color 0.3s;
 }
 .line.active {
-  color: var(--lime);
-  font-family: var(--serif);
+  color: var(--green);
   font-size: 16px;
-  letter-spacing: 0.04em;
-  transform: translateX(4px);
+  font-weight: 600;
 }
 .line.passed {
-  color: rgba(232, 239, 220, 0.28);
+  color: #666a63;
+}
+.empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 20px;
 }
 </style>

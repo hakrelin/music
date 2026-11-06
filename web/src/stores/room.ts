@@ -13,7 +13,7 @@ import type {
   SearchResult,
   SelfInfo,
   ServerMsg,
-  Track
+  Track,
 } from '@/types';
 
 const NICK_KEY = 'yue.nick';
@@ -38,7 +38,7 @@ const defaultMode = (): RoomMode => ({
   goodMode: false,
   banChoose: false,
   banSwitch: false,
-  volume: 70
+  volume: 70,
 });
 
 export const useRoomStore = defineStore('room', {
@@ -51,7 +51,13 @@ export const useRoomStore = defineStore('room', {
     joined: false,
     fatal: '',
     mock: IS_MOCK,
-    room: null as { id: string; name: string; radio: boolean; needPwd: boolean; builtin?: boolean } | null,
+    room: null as {
+      id: string;
+      name: string;
+      radio: boolean;
+      needPwd: boolean;
+      builtin?: boolean;
+    } | null,
     self: null as SelfInfo | null,
     online: 0,
     queue: [] as Track[],
@@ -60,15 +66,16 @@ export const useRoomStore = defineStore('room', {
     chat: [] as ChatMsg[],
     mode: defaultMode(),
     votes: 0,
-    voteNeed: 0
+    voteNeed: 0,
   }),
   getters: {
     current: (s): Track | null => s.queue[0] || null,
     upcoming: (s): Track[] => s.queue.slice(1),
     isRoot: (s) => s.self?.role === 'root',
     isAdmin: (s) => s.self?.role === 'admin' || s.self?.role === 'root',
-    roleLabel: (s) => (s.self?.role === 'root' ? '房主' : s.self?.role === 'admin' ? '管理员' : '听众'),
-    serverNow: (s) => Date.now() + s.clockOffset
+    roleLabel: (s) =>
+      s.self?.role === 'root' ? '房主' : s.self?.role === 'admin' ? '管理员' : '听众',
+    serverNow: (s) => Date.now() + s.clockOffset,
   },
   actions: {
     setNick(nick: string) {
@@ -92,7 +99,7 @@ export const useRoomStore = defineStore('room', {
         onStatus: (connected) => {
           this.connected = connected;
         },
-        onEvent: (msg) => this.handleEvent(msg)
+        onEvent: (msg) => this.handleEvent(msg),
       });
       this.socket = markRaw(socket);
       socket.connect();
@@ -132,7 +139,7 @@ export const useRoomStore = defineStore('room', {
             goodMode: Boolean(msg.goodMode),
             banChoose: Boolean(msg.banChoose),
             banSwitch: Boolean(msg.banSwitch),
-            volume: Number(msg.volume ?? 70)
+            volume: Number(msg.volume ?? 70),
           };
           break;
         }
@@ -159,9 +166,10 @@ export const useRoomStore = defineStore('room', {
           const prev = this.queue[0];
           this.startedAt = Number(msg.startedAt || Date.now());
           if (!track) break;
-          this.queue = prev && prev.id === track.id
-            ? [{ ...prev, ...track }, ...this.queue.slice(1)]
-            : [track, ...this.queue.filter((t) => t.id !== track.id)];
+          this.queue =
+            prev && prev.id === track.id
+              ? [{ ...prev, ...track }, ...this.queue.slice(1)]
+              : [track, ...this.queue.filter((t) => t.id !== track.id)];
           break;
         }
         case 'chat': {
@@ -175,7 +183,7 @@ export const useRoomStore = defineStore('room', {
             type: 'notice',
             nick: '',
             content: String(msg.content || ''),
-            ts: Date.now()
+            ts: Date.now(),
           });
           break;
         }
@@ -222,10 +230,19 @@ export const useRoomStore = defineStore('room', {
     },
     pick(track: Pick<Track, 'id' | 'source' | 'name'>) {
       if (this.mock) {
-        this.queue.push({ ...track, album: '', artist: '上海アリス幻樂団', cover: '', duration: 200, fee: 0, url: '', nick: this.nick });
+        this.queue.push({
+          ...track,
+          album: '',
+          artist: '上海アリス幻樂団',
+          cover: '',
+          duration: 200,
+          fee: 0,
+          url: '',
+          nick: this.nick,
+        });
         return;
       }
-      this.socket?.send({ t: 'pick', id: track.id, source: track.source || 'wy', name: track.name });
+      this.socket?.send({ t: 'pick', id: track.id, source: track.source || '', name: track.name });
     },
     voteSkip() {
       if (this.mock) return;
@@ -235,7 +252,7 @@ export const useRoomStore = defineStore('room', {
       if (this.mock) {
         return { tracks: mockTracks.slice(0, 6), total: 6 };
       }
-      const r = await this.socket!.request({ t: 'search', q, source: 'wy', page, size });
+      const r = await this.socket!.request({ t: 'search', q, page, size });
       return { tracks: (r.tracks as Track[]) || [], total: Number(r.total || 0) };
     },
     async searchPlaylists(q: string, page = 1, size = 10): Promise<PlaylistSearchResult> {
@@ -252,7 +269,7 @@ export const useRoomStore = defineStore('room', {
       const r = await this.socket!.request({ t: 'playlist.get', id }, 20000);
       return {
         playlist: r.playlist as Playlist,
-        tracks: (r.tracks as Track[]) || []
+        tracks: (r.tracks as Track[]) || [],
       };
     },
     async userPlaylists(uid: string): Promise<Playlist[]> {
@@ -303,7 +320,13 @@ export const useRoomStore = defineStore('room', {
     /* ——— 预览模式 ——— */
     applyMock(roomId: string) {
       const info = mockRooms.find((r) => r.id === roomId) || mockRooms[0];
-      this.room = { id: info.id, name: info.name, radio: info.radio, needPwd: info.needPwd, builtin: info.builtin };
+      this.room = {
+        id: info.id,
+        name: info.name,
+        radio: info.radio,
+        needPwd: info.needPwd,
+        builtin: info.builtin,
+      };
       this.self = { session: 'mock', nick: this.nick, role: 'root' };
       this.connected = true;
       this.joined = true;
@@ -315,6 +338,6 @@ export const useRoomStore = defineStore('room', {
       this.startedAt = Date.now() - 61000;
       this.clockOffset = 0;
       usePlayerStore().load(null, 0, 0);
-    }
-  }
+    },
+  },
 });

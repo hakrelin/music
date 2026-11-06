@@ -56,8 +56,8 @@ func Default() Config {
 		Provider:      "auto",
 		NeteaseCookie: "",
 		Site: Site{
-			Name:    "茶与月色",
-			Tagline: "在幻想乡，一起听一首歌",
+			Name:    "茶与金平糖",
+			Tagline: "和大家一起听歌",
 		},
 		RootPassword:  "654321",
 		AdminPassword: "123456",
@@ -210,10 +210,10 @@ func (c *Config) Normalize() {
 		c.Provider = "auto"
 	}
 	if c.Site.Name == "" {
-		c.Site.Name = "茶与月色"
+		c.Site.Name = "茶与金平糖"
 	}
 	if c.Site.Tagline == "" {
-		c.Site.Tagline = "在幻想乡，一起听一首歌"
+		c.Site.Tagline = "和大家一起听歌"
 	}
 	// 0 也视为"关闭回收"，负数归一成 0。
 	if c.RoomIdleMinutes < 0 {

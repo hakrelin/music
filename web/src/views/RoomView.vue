@@ -1,494 +1,550 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import SiteHeader from '@/components/SiteHeader.vue';
+import AppDialog from '@/components/AppDialog.vue';
 import Icon from '@/components/Icon.vue';
-import ChatPanel from '@/components/room/ChatPanel.vue';
 import PlayerPanel from '@/components/room/PlayerPanel.vue';
+import PlayerBar from '@/components/room/PlayerBar.vue';
 import QueueList from '@/components/room/QueueList.vue';
+import ChatPanel from '@/components/room/ChatPanel.vue';
 import SearchPanel from '@/components/room/SearchPanel.vue';
 import SettingsDialog from '@/components/room/SettingsDialog.vue';
-import { usePlayerStore } from '@/stores/player';
 import { useRoomStore } from '@/stores/room';
-
+import { usePlayerStore } from '@/stores/player';
+import { useRoomsStore } from '@/stores/rooms';
+import { useUiStore } from '@/stores/ui';
 const route = useRoute();
 const room = useRoomStore();
 const player = usePlayerStore();
-
+const rooms = useRoomsStore();
+const ui = useUiStore();
 const settingsOpen = ref(false);
+const searchOpen = ref(false);
+const mobileTab = ref('play');
 const gatePwd = ref('');
-const gateMsg = ref('');
-const mobileTab = ref<'play' | 'queue' | 'chat' | 'search'>('play');
-const isMobile = ref(false);
-
-let mq: MediaQueryList | null = null;
-let syncTimer = 0;
-
-const needGate = computed(() => !room.joined && !!room.fatal);
-const loadingRoom = computed(() => !room.joined && !room.fatal);
-const roomTags = computed(() => {
-  const tags: string[] = [];
-  if (room.room?.builtin) tags.push('常驻');
-  if (room.room?.radio) tags.push('电台');
-  if (room.room?.needPwd) tags.push('加密');
-  return tags;
-});
-
-function onMobileChange() {
-  isMobile.value = mq ? mq.matches : window.innerWidth < 900;
+let timer = 0;
+const needPassword = computed(() => /密码|口令|password/i.test(room.fatal));
+function connect() {
+  room.connect(
+    String(route.params.id),
+    String(history.state.roomPassword || route.query.pwd || ''),
+  );
 }
-
-function submitGate() {
-  if (!gatePwd.value.trim()) {
-    gateMsg.value = '请输入房间密码';
-    return;
-  }
-  room.connect(String(route.params.id), gatePwd.value.trim());
-}
-
-function onKey(ev: KeyboardEvent) {
-  const el = ev.target as HTMLElement | null;
-  if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
-  if (ev.code === 'Space') {
-    ev.preventDefault();
+function key(e: KeyboardEvent) {
+  const el = e.target as HTMLElement | null;
+  if (el?.closest('input,textarea,select,button,a,[contenteditable],dialog')) return;
+  if (e.code === 'Space') {
+    e.preventDefault();
     player.toggle();
-  } else if (ev.code === 'ArrowRight') {
-    room.voteSkip();
+  }
+  if (e.code === 'ArrowRight' && !room.mode.banSwitch) room.voteSkip();
+}
+async function share() {
+  try {
+    await navigator.clipboard.writeText(
+      location.origin + '/room/' + encodeURIComponent(String(route.params.id)),
+    );
+    ui.ok('房间链接已复制');
+  } catch {
+    ui.warn('可以复制地址栏，把房间分享给朋友');
   }
 }
-
 onMounted(() => {
-  const id = String(route.params.id || '');
-  const pwd = String(route.query.pwd || '');
-  room.connect(id, pwd);
+  connect();
   player.init();
-
-  mq = window.matchMedia('(max-width: 900px)');
-  onMobileChange();
-  mq.addEventListener('change', onMobileChange);
-
-  syncTimer = window.setInterval(() => {
+  void rooms.loadConfig();
+  timer = window.setInterval(() => {
     if (room.joined && room.current && player.playing) player.sync(room.clockOffset);
   }, 5000);
-
-  window.addEventListener('keydown', onKey);
+  window.addEventListener('keydown', key);
 });
-
 onBeforeUnmount(() => {
   room.leave();
   player.pause();
-  window.clearInterval(syncTimer);
-  mq?.removeEventListener('change', onMobileChange);
-  window.removeEventListener('keydown', onKey);
+  clearInterval(timer);
+  window.removeEventListener('keydown', key);
 });
-
 watch(
-  () => room.fatal,
-  (msg) => {
-    if (msg) {
-      gateMsg.value = '';
-      if (/密码/.test(msg)) gateMsg.value = '';
-    }
-  }
+  () => route.params.id,
+  (id, prev) => {
+    if (id !== prev) connect();
+  },
 );
-
 watch(
   [() => room.current?.id, () => room.current?.url, () => room.startedAt, () => room.clockOffset],
   () => {
-    const track = room.current;
-    if (!track) return;
-    player.load(track, room.startedAt || Date.now(), room.clockOffset, true);
-  }
+    if (room.current)
+      player.load(room.current, room.startedAt || Date.now(), room.clockOffset, true);
+    else player.load(null, 0, 0);
+  },
 );
 </script>
-
 <template>
-  <div class="room-shell">
-    <div class="room-bg" aria-hidden="true">
-      <img src="/art/night.jpg" alt="" />
-      <div class="bg-veil"></div>
-    </div>
-
-    <header class="top">
-      <a class="back" href="/">
-        <Icon name="home" :size="16" />
-        <span>大厅</span>
-      </a>
-
-      <div class="room-title">
-        <h1>{{ room.room?.name || '正在进门…' }}</h1>
-        <div class="tags">
-          <span v-for="t in roomTags" :key="t" class="tag night">{{ t }}</span>
-          <span class="conn" :class="{ on: room.connected }">
-            <i></i>{{ room.connected ? '已连接' : '连接中…' }}
-          </span>
+  <div class="room-page">
+    <SiteHeader compact
+      ><button class="icon-btn" aria-label="房间设置" @click="settingsOpen = true">
+        <Icon name="settings" :size="19" /></button
+    ></SiteHeader>
+    <main class="room-main">
+      <div class="room-top">
+        <div class="room-heading">
+          <RouterLink class="back" to="/" aria-label="返回听歌大厅"
+            ><Icon name="prev" :size="17"
+          /></RouterLink>
+          <div>
+            <div class="room-name">
+              <h1>{{ room.room?.name || '正在连接房间' }}</h1>
+              <span v-if="room.room?.builtin" class="tag">常驻</span
+              ><span v-if="room.room?.needPwd" class="lock-label"
+                ><Icon name="lock" :size="12"
+              /></span>
+            </div>
+            <p>
+              <span class="connection" :class="{ connected: room.connected }"
+                ><i />{{ room.connected ? '已连接' : '正在重连…' }}</span
+              ><span class="top-separator">·</span>{{ room.online }} 人一起听<span
+                class="top-separator"
+                >·</span
+              >{{ room.queue.length }} 首歌曲
+            </p>
+          </div>
         </div>
-      </div>
-
-      <div class="top-right">
-        <span class="online"><Icon name="users" :size="15" />{{ room.online }} 人在听</span>
-        <button class="icon-btn night" type="button" aria-label="房间设置" @click="settingsOpen = true">
-          <Icon name="settings" :size="18" />
+        <button class="invite" @click="share">
+          <Icon name="link" :size="15" /><span>邀请朋友</span>
         </button>
       </div>
-    </header>
-
-    <div class="wrap">
-      <nav v-if="isMobile" class="mobile-tabs" aria-label="房间面板">
-        <button :class="{ on: mobileTab === 'play' }" @click="mobileTab = 'play'"><Icon name="music" :size="16" />播放</button>
-        <button :class="{ on: mobileTab === 'queue' }" @click="mobileTab = 'queue'"><Icon name="list" :size="16" />队列</button>
-        <button :class="{ on: mobileTab === 'chat' }" @click="mobileTab = 'chat'"><Icon name="chat" :size="16" />聊天</button>
-        <button :class="{ on: mobileTab === 'search' }" @click="mobileTab = 'search'"><Icon name="search" :size="16" />点歌</button>
+      <div v-if="player.blocked" class="play-notice">
+        <span><Icon name="volume" :size="15" />浏览器需要你点击一次，才能开始播放。</span
+        ><button @click="player.play()">开始收听 <Icon name="play" :size="12" /></button>
+      </div>
+      <div v-else-if="player.failed" class="play-notice failed" role="alert">
+        <span>这首歌暂时无法播放，可以重试或投票切歌。</span
+        ><button @click="player.retry()">重试</button>
+      </div>
+      <nav class="mobile-tabs" aria-label="房间面板">
+        <button
+          v-for="t in [
+            { id: 'play', label: '正在听', icon: 'music' },
+            { id: 'queue', label: '队列', icon: 'list' },
+            { id: 'chat', label: '聊天', icon: 'chat' },
+          ]"
+          :key="t.id"
+          :class="{ active: mobileTab === t.id }"
+          :aria-pressed="mobileTab === t.id"
+          @click="mobileTab = t.id"
+        >
+          <Icon :name="t.icon" :size="15" />{{ t.label }}</button
+        ><button @click="searchOpen = true"><Icon name="plus" :size="15" />点歌</button>
       </nav>
-
-      <div class="grid">
-        <div class="col-main">
-          <div v-show="!isMobile || mobileTab === 'play'">
-            <PlayerPanel />
-          </div>
-          <div v-show="!isMobile || mobileTab === 'queue'" class="queue-slot">
-            <QueueList />
-          </div>
+      <div class="room-layout">
+        <aside class="queue-slot" :class="{ mobileActive: mobileTab === 'queue' }">
+          <QueueList @search="searchOpen = true" />
+        </aside>
+        <div class="player-slot" :class="{ mobileActive: mobileTab === 'play' }">
+          <PlayerPanel />
         </div>
-
-        <aside class="col-side">
-          <div v-show="!isMobile || mobileTab === 'search'">
-            <SearchPanel />
-          </div>
-          <div v-show="!isMobile || mobileTab === 'chat'">
-            <ChatPanel />
-          </div>
+        <aside class="chat-slot" :class="{ mobileActive: mobileTab === 'chat' }">
+          <ChatPanel />
         </aside>
       </div>
-    </div>
-
-    <!-- 进房加载 -->
-    <transition name="fade">
-      <div v-if="loadingRoom" class="curtain">
-        <div class="curtain-inner">
-          <div class="rings"><span></span><span></span><span></span></div>
-          <p>正在推开茶室的门…</p>
-        </div>
+      <div class="room-bottom">
+        <span><span class="mini-star">✦</span> TEA &amp; KOMPEITO</span
+        ><span>听歌的时候，也可以聊聊天。</span
+        ><button @click="searchOpen = true"><Icon name="plus" :size="12" />点一首歌</button>
       </div>
-    </transition>
-
-    <!-- 密码房 -->
-    <transition name="fade">
-      <div v-if="needGate" class="curtain">
-        <div class="gate">
-          <Icon name="lock" :size="26" />
-          <p class="eyebrow light">需要房间钥匙</p>
-          <h2>这间房上了锁</h2>
-          <p class="gate-msg">{{ room.fatal }}</p>
-          <form class="gate-form" @submit.prevent="submitGate">
-            <input v-model="gatePwd" class="input night" type="password" placeholder="房间密码" autofocus />
-            <button class="btn btn-lime" type="submit">推门进去</button>
+    </main>
+    <PlayerBar /><AppDialog :open="searchOpen" title="点一首歌" wide @close="searchOpen = false"
+      ><SearchPanel /></AppDialog
+    ><SettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
+    <div v-if="!room.joined" class="room-gate">
+      <div class="gate-inner">
+        <template v-if="!room.fatal"
+          ><span class="loading-note"><Icon name="radio" :size="30" /></span>
+          <h2>正在连接房间</h2>
+          <p>马上就能和大家一起听。</p></template
+        ><template v-else
+          ><Icon :name="needPassword ? 'lock' : 'info'" :size="30" />
+          <h2>{{ needPassword ? '这个房间需要密码' : '暂时无法进入房间' }}</h2>
+          <p role="alert">{{ room.fatal }}</p>
+          <form
+            v-if="needPassword"
+            class="gate-form"
+            @submit.prevent="room.connect(String(route.params.id), gatePwd.trim())"
+          >
+            <label class="visually-hidden" for="room-password">房间密码</label
+            ><input
+              id="room-password"
+              v-model="gatePwd"
+              class="input"
+              type="password"
+              placeholder="输入房间密码"
+              required
+            /><button class="btn btn-primary" type="submit">进入房间</button>
           </form>
-          <p v-if="gateMsg" class="gate-err">{{ gateMsg }}</p>
-          <a class="gate-back" href="/">回到大厅</a>
-        </div>
+          <button v-else class="btn btn-primary" @click="connect">重新连接</button></template
+        ><RouterLink class="gate-back" to="/">← 返回听歌大厅</RouterLink>
       </div>
-    </transition>
-
-    <SettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
+    </div>
   </div>
 </template>
-
 <style scoped>
-.room-shell {
-  min-height: 100vh;
-  background: var(--night);
-  color: #e9efe1;
-  position: relative;
-  isolation: isolate;
-}
-.room-bg {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
+.room-page {
+  height: 100dvh;
   overflow: hidden;
+  padding-bottom: 104px;
 }
-.room-bg img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: 70% 40%;
-  opacity: 0.26;
-  filter: saturate(0.8);
-}
-.bg-veil {
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(120% 90% at 70% 0%, rgba(226, 237, 186, 0.08), transparent 55%),
-    linear-gradient(180deg, rgba(9, 29, 24, 0.86) 0%, rgba(9, 29, 24, 0.94) 40%, #0a201b 100%);
-}
-
-/* 顶栏 */
-.top {
-  max-width: 1520px;
-  margin: 0 auto;
-  padding: 18px 4% 14px;
-  display: flex;
-  align-items: center;
-  gap: clamp(14px, 2.4vw, 30px);
-}
-.back {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 14px;
-  border-radius: 999px;
-  border: 1px solid var(--line-night-strong);
-  font-size: 11.5px;
-  color: rgba(232, 239, 220, 0.7);
-  flex: none;
-  transition: all 0.2s ease;
-}
-.back:hover {
-  color: var(--lime);
-  border-color: var(--lime);
-}
-.room-title {
-  flex: 1;
-  min-width: 0;
+.room-main {
+  max-width: 1400px;
+  margin: auto;
+  padding: 3px 32px 0;
+  height: calc(100% - 84px);
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  min-height: 0;
 }
-.room-title h1 {
-  font-size: clamp(19px, 2vw, 26px);
-  color: #f2f6e9;
-  letter-spacing: 0.1em;
+.room-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 3px 20px;
+  flex: none;
+}
+.room-heading {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  min-width: 0;
+}
+.room-heading > div {
+  min-width: 0;
+}
+.back {
+  width: 30px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  color: #626b5a;
+  flex: none;
+}
+.back:hover {
+  color: var(--green);
+}
+.room-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.room-name h1 {
+  font-size: 22px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  letter-spacing: -0.6px;
 }
-.tags {
+.room-name .tag {
+  font-size: 11px;
+  min-height: 19px;
+  padding: 1px 6px;
+}
+.lock-label {
+  color: var(--muted);
+}
+.room-heading p {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.conn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10.5px;
-  color: rgba(232, 239, 220, 0.4);
-}
-.conn i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #c9a15a;
-}
-.conn.on {
-  color: rgba(232, 239, 220, 0.55);
-}
-.conn.on i {
-  background: #9fc06a;
-  box-shadow: 0 0 0 3px rgba(159, 192, 106, 0.14);
-}
-.top-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: none;
-}
-.online {
-  display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 11.5px;
-  color: rgba(232, 239, 220, 0.55);
+  font-size: 11px;
+  color: #646d5d;
+  margin-top: 5px;
+}
+.connection {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.connection i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #d6b56b;
+}
+.connection.connected i {
+  background: #8cab78;
+}
+.top-separator {
+  color: #666a60;
+}
+.invite {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  padding: 8px 13px;
+  border-radius: 9px;
+  background: #fff;
+  border: 1px solid var(--line);
+  flex: none;
+}
+.invite:hover {
+  background: var(--paper-2);
+}
+.room-layout {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr) 310px;
+  border: 1px solid var(--line);
+  border-radius: 21px;
+  overflow: hidden;
+  background: #fff;
+  min-height: 0;
+  flex: 1;
+}
+.queue-slot {
+  border-right: 1px solid var(--line);
+  min-height: 0;
+}
+.player-slot {
+  min-width: 0;
+  min-height: 0;
+  background: radial-gradient(ellipse at 50% 30%, #f1f5e8, #fafbf7 75%);
+}
+.chat-slot {
+  border-left: 1px solid var(--line);
+  min-height: 0;
+}
+.room-bottom {
+  height: 39px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  font-size: 11px;
+  color: #676c60;
+  flex: none;
+  padding: 0 5px;
+}
+.room-bottom > span:first-child {
+  font-size: 10px;
+  letter-spacing: 1.4px;
+}
+.mini-star {
+  color: #776638;
+  font-size: 14px;
+  margin-right: 6px;
+}
+.room-bottom button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #5e6c54;
+}
+.play-notice {
+  padding: 9px 15px;
+  background: #edf3df;
+  border: 1px solid #dce8cd;
+  color: #557348;
+  border-radius: 10px;
+  margin: 0 0 13px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.play-notice > span,
+.play-notice button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.play-notice button {
+  font-weight: 600;
   white-space: nowrap;
 }
-
-/* 主体 */
-.wrap {
-  max-width: 1520px;
-  margin: 0 auto;
-  padding: 8px 4% 60px;
+.play-notice.failed {
+  background: #fff0e7;
+  color: #8c6046;
+  border-color: #f0decf;
 }
-.grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
-  gap: clamp(16px, 1.6vw, 24px);
-  align-items: stretch;
-}
-.col-main,
-.col-side {
-  display: flex;
-  flex-direction: column;
-  gap: clamp(16px, 1.6vw, 24px);
-  min-width: 0;
-}
-.col-side > div {
-  display: flex;
-  flex-direction: column;
-}
-.col-side > div:last-child {
-  flex: 1;
-}
-.col-side > div:last-child > :deep(.card) {
-  height: 100%;
-}
-
-/* 移动端 tab */
 .mobile-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--line-night);
-  border-radius: 999px;
-  margin-bottom: 14px;
+  display: none;
 }
-.mobile-tabs button {
-  flex: 1;
-  height: 38px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: rgba(232, 239, 220, 0.55);
-}
-.mobile-tabs button.on {
-  background: rgba(226, 237, 186, 0.14);
-  color: var(--lime);
-}
-
-/* 幕布 */
-.curtain {
+.room-gate {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: 40;
   display: grid;
   place-items: center;
-  background: rgba(7, 24, 20, 0.86);
-  backdrop-filter: blur(8px);
+  background: #f5f8f0e8;
+  backdrop-filter: blur(10px);
   padding: 20px;
 }
-.curtain-inner {
+.gate-inner {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
-  color: rgba(232, 239, 220, 0.6);
-  font-size: 12.5px;
-  letter-spacing: 0.16em;
-}
-.rings {
-  display: flex;
-  gap: 6px;
-}
-.rings span {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--lime);
-  opacity: 0.3;
-  animation: pulse 1.2s ease-in-out infinite;
-}
-.rings span:nth-child(2) {
-  animation-delay: 0.18s;
-}
-.rings span:nth-child(3) {
-  animation-delay: 0.36s;
-}
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 0.25;
-    transform: translateY(0);
-  }
-  50% {
-    opacity: 1;
-    transform: translateY(-4px);
-  }
-}
-
-/* 密码门 */
-.gate {
-  width: min(420px, 100%);
-  background: rgba(16, 46, 39, 0.92);
-  border: 1px solid var(--line-night-strong);
-  border-radius: var(--r-l);
-  padding: 34px 32px 28px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  gap: 16px;
+  max-width: 390px;
   text-align: center;
-  color: var(--lime);
-  box-shadow: var(--shadow-night);
 }
-.eyebrow.light {
-  margin-top: 16px;
-  color: rgba(232, 239, 220, 0.5);
+.gate-inner > .icon {
+  color: var(--green);
 }
-.eyebrow.light::before {
-  color: rgba(232, 239, 220, 0.25);
+.gate-inner h2 {
+  font-size: 21px;
 }
-.gate h2 {
-  margin-top: 10px;
-  font-size: 24px;
-  color: #f2f6e9;
-  letter-spacing: 0.1em;
-}
-.gate-msg {
-  margin-top: 10px;
-  font-size: 12px;
-  color: rgba(232, 239, 220, 0.55);
-  line-height: 1.9;
+.gate-inner p {
+  font-size: 14px;
+  color: var(--muted);
 }
 .gate-form {
-  width: 100%;
-  margin-top: 20px;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  width: 100%;
 }
-.gate-err {
-  margin-top: 10px;
-  font-size: 11.5px;
-  color: #f0a08f;
+.gate-form .input {
+  min-width: 0;
 }
 .gate-back {
-  margin-top: 18px;
-  font-size: 11.5px;
-  color: rgba(232, 239, 220, 0.45);
-  border-bottom: 1px solid rgba(232, 239, 220, 0.2);
-  padding-bottom: 2px;
+  font-size: 14px;
+  color: var(--green);
+  margin-top: 7px;
 }
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.25s ease;
+.loading-note {
+  color: var(--green);
+  animation: pulse 1.6s infinite alternate;
 }
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
+@keyframes pulse {
+  to {
+    opacity: 0.3;
+  }
 }
-
+@media (max-width: 1200px) {
+  .room-layout {
+    grid-template-columns: 235px minmax(0, 1fr) 280px;
+  }
+  .room-main {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+@media (max-width: 1000px) and (min-width: 901px) {
+  .room-layout {
+    grid-template-columns: 205px minmax(0, 1fr) 255px;
+  }
+  .room-main {
+    padding-left: 15px;
+    padding-right: 15px;
+  }
+}
 @media (max-width: 900px) {
-  .top {
-    padding: 14px 20px 10px;
-    flex-wrap: wrap;
+  .room-page {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+    padding-bottom: 85px;
+  }
+  .room-main {
+    height: auto;
+    padding: 0 18px;
+  }
+  .room-top {
+    padding: 7px 0 17px;
     gap: 10px;
   }
-  .room-title h1 {
+  .room-heading {
+    gap: 5px;
+  }
+  .room-name h1 {
     font-size: 19px;
   }
-  .online {
+  .room-heading p {
+    font-size: 11px;
+    gap: 5px;
+  }
+  .invite {
+    padding: 7px 9px;
+    font-size: 12px;
+  }
+  .mobile-tabs {
+    display: flex;
+    align-items: center;
+    margin-bottom: 15px;
+    border-bottom: 1px solid var(--line);
+    gap: 4px;
+  }
+  .mobile-tabs button {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 0 13px;
+    font-size: 14px;
+    color: var(--muted);
+    position: relative;
+  }
+  .mobile-tabs button.active {
+    color: var(--green);
+    font-weight: 600;
+  }
+  .mobile-tabs button.active:after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 25%;
+    right: 25%;
+    height: 3px;
+    background: var(--green);
+    border-radius: 3px;
+  }
+  .room-layout {
+    display: block;
+    border-radius: 17px;
+  }
+  .queue-slot,
+  .player-slot,
+  .chat-slot {
+    display: none;
+    border: 0;
+  }
+  .mobileActive {
+    display: block;
+  }
+  .room-bottom {
+    font-size: 10px;
+    height: 32px;
+    gap: 5px;
+  }
+  .room-bottom > span:nth-child(2) {
     display: none;
   }
-  .wrap {
-    padding: 6px 16px 40px;
+  .room-bottom > span:first-child {
+    font-size: 7px;
   }
-  .grid {
-    grid-template-columns: 1fr;
+  .play-notice {
+    font-size: 12px;
+    align-items: flex-start;
+  }
+  .play-notice > span {
+    align-items: flex-start;
+  }
+  .play-notice > span > .icon {
+    margin-top: 2px;
+    flex: none;
+  }
+}
+@media (max-width: 380px) {
+  .room-main {
+    padding: 0 13px;
+  }
+  .invite span {
+    display: none;
+  }
+  .room-name h1 {
+    font-size: 17px;
   }
 }
 </style>

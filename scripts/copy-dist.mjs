@@ -1,20 +1,24 @@
-// 把 web/dist 拷贝到 server/internal/webui/dist，供 //go:embed 打包。
-// 用法：node scripts/copy-dist.mjs
-import { cpSync, existsSync, rmSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+// Copy the Vite build into the Go embed directory, including on Windows.
+import { access, mkdir, readdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const src = join(root, 'web', 'dist');
-const dst = join(root, 'server', 'internal', 'webui', 'dist');
-
-if (!existsSync(src)) {
-  console.error(`[copy-dist] 找不到 ${src}，先运行 npm --prefix web run build`);
-  process.exit(1);
+const source = join(root, 'web', 'dist');
+const target = resolve(root, 'server', 'internal', 'webui', 'dist');
+const within = relative(root, target);
+if (within.startsWith('..') || isAbsolute(within)) throw new Error('Embed output must stay inside the repository');
+await access(join(source, 'index.html')).catch(() => { throw new Error('Run npm --prefix web run build first'); });
+await mkdir(target, { recursive: true });
+for (const entry of await readdir(target)) {
+  const output = resolve(target, entry);
+  if (!relative(target, output).startsWith('..') && output !== target) await rm(output, { recursive: true, force: true });
 }
-
-rmSync(dst, { recursive: true, force: true });
-mkdirSync(dst, { recursive: true });
-cpSync(src, dst, { recursive: true });
-
-console.log(`[copy-dist] ${src} -> ${dst}`);
+async function copyTree(from, to) {
+  await mkdir(to, { recursive: true });
+  for (const entry of await readdir(from, { withFileTypes: true })) {
+    if (entry.isDirectory()) await copyTree(join(from, entry.name), join(to, entry.name));
+    else if (entry.isFile()) await writeFile(join(to, entry.name), await readFile(join(from, entry.name)));
+  }
+}
+await copyTree(source, target);
+console.log('[copy-dist] Frontend copied into Go embed directory');

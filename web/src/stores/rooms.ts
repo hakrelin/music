@@ -9,14 +9,14 @@ export const useRoomsStore = defineStore('rooms', {
     config: null as SiteConfig | null,
     loading: false,
     error: '',
-    mock: IS_MOCK
+    mock: IS_MOCK,
   }),
   getters: {
     radioRooms: (s) => s.rooms.filter((r) => r.radio),
     normalRooms: (s) => s.rooms.filter((r) => !r.radio),
     totalOnline: (s) => s.rooms.reduce((n, r) => n + (r.online || 0), 0),
-    siteName: (s) => s.config?.site.name || '茶与月色',
-    tagline: (s) => s.config?.site.tagline || '在幻想乡，一起听一首歌'
+    siteName: (s) => s.config?.site.name || '茶与金平糖',
+    tagline: (s) => s.config?.site.tagline || '和大家一起听歌',
   },
   actions: {
     async loadConfig() {
@@ -57,13 +57,13 @@ export const useRoomsStore = defineStore('rooms', {
           radio: false,
           needPwd: body.needPwd,
           online: 1,
-          builtin: false
+          builtin: false,
         });
         return id;
       }
       const res = await http.createRoom(body);
       await this.loadRooms();
       return res.id;
-    }
-  }
+    },
+  },
 });

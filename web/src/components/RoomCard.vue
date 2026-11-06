@@ -1,181 +1,183 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import Icon from '@/components/Icon.vue';
+import { ref, watch } from 'vue';
+import Icon from './Icon.vue';
 import type { RoomSummary } from '@/types';
-
 const props = defineProps<{ room: RoomSummary }>();
-const emit = defineEmits<{ (e: 'enter', room: RoomSummary): void }>();
-
-const arts = ['/art/night.jpg', '/art/hero.jpg', '/art/walk.jpg'];
-const art = computed(() => {
-  let h = 0;
-  for (const ch of props.room.id) h = (h * 31 + ch.charCodeAt(0)) % 997;
-  return arts[h % arts.length];
-});
-const hasPwd = computed(() => props.room.needPwd);
+defineEmits<{ enter: [room: RoomSummary] }>();
+const broken = ref(false);
+watch(
+  () => props.room.now?.cover,
+  () => (broken.value = false),
+);
 </script>
-
 <template>
-  <article class="room-card" @click="emit('enter', room)">
-    <div class="media">
-      <img :src="art" :alt="room.name + ' 的封面插画'" loading="lazy" />
-      <div class="media-veil"></div>
-      <div class="media-tags">
-        <span v-if="room.radio" class="tag night"><Icon name="radio" :size="13" />电台</span>
-        <span v-if="hasPwd" class="tag night"><Icon name="lock" :size="12" />加密</span>
+  <article class="room-card">
+    <div class="room-card-top">
+      <div class="room-cover">
+        <img
+          v-if="room.now?.cover && !broken"
+          :src="room.now.cover"
+          alt=""
+          loading="lazy"
+          @error="broken = true"
+        /><Icon v-else :name="room.radio ? 'radio' : 'music'" :size="30" />
       </div>
-      <div v-if="room.now" class="media-now">
-        <span class="now-label">正在播放</span>
-        <b class="now-name">{{ room.now.name }}</b>
-        <span class="now-artist">{{ room.now.artist }}</span>
+      <div class="room-info">
+        <div class="room-labels">
+          <span class="room-kind">{{ room.radio ? '电台' : '点歌房' }}</span
+          ><Icon v-if="room.needPwd" name="lock" :size="12" /><span
+            v-if="room.builtin"
+            class="resident"
+            >常驻</span
+          >
+        </div>
+        <h3>{{ room.name }}</h3>
+        <span class="room-online"><i class="online-dot" />{{ room.online }} 人在听</span>
       </div>
+      <button class="join" :aria-label="'加入' + room.name" @click="$emit('enter', room)">
+        <Icon :name="room.needPwd ? 'lock' : 'arrow'" :size="20" />
+      </button>
     </div>
-
-    <div class="body">
-      <h3>{{ room.name }}</h3>
-      <p class="desc">{{ room.desc || '这间房还没有写介绍。' }}</p>
-      <div class="foot">
-        <span class="online"><i></i>{{ room.online || 0 }} 人在听</span>
-        <button class="enter" type="button" @click.stop="emit('enter', room)">
-          {{ hasPwd ? '输入密码' : '入席' }} <Icon name="arrow" :size="15" />
-        </button>
-      </div>
+    <p class="room-desc">{{ room.desc || '想听什么，就点什么。' }}</p>
+    <div class="room-song">
+      <Icon name="music" :size="13" /><span>{{ room.now?.name || '还没有歌曲，来点第一首吧' }}</span
+      ><span v-if="room.now?.artist" class="artist">{{ room.now.artist }}</span>
     </div>
   </article>
 </template>
-
 <style scoped>
 .room-card {
   background: #fff;
   border: 1px solid var(--line);
-  border-radius: var(--r-l);
-  overflow: hidden;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  transition: transform 0.35s ease, box-shadow 0.35s ease, border-color 0.35s ease;
+  border-radius: 18px;
+  padding: 21px;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 .room-card:hover {
-  transform: translateY(-4px);
+  border-color: #c3d5bf;
   box-shadow: var(--shadow-card);
-  border-color: var(--line-strong);
 }
-.media {
-  position: relative;
-  aspect-ratio: 16 / 9;
+.room-card-top {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+.room-cover {
+  height: 68px;
+  width: 68px;
+  border-radius: 13px;
   overflow: hidden;
-  background: var(--deep);
+  background: linear-gradient(135deg, #e8eedb, #dce9dd);
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: #507059;
 }
-.media img {
+.room-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scale(1.02);
-  transition: transform 0.8s ease;
 }
-.room-card:hover .media img {
-  transform: scale(1.06);
-}
-.media-veil {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, rgba(12, 36, 31, 0.05) 0%, rgba(12, 36, 31, 0.15) 45%, rgba(12, 36, 31, 0.86) 100%);
-}
-.media-tags {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  display: flex;
-  gap: 6px;
-}
-.media-tags .tag {
-  background: rgba(12, 36, 31, 0.55);
-  color: #e8efdc;
-  backdrop-filter: blur(6px);
-}
-.media-now {
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 13px;
-  color: #f2f6e9;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.now-label {
-  font-size: 9.5px;
-  letter-spacing: 0.3em;
-  color: rgba(232, 239, 220, 0.62);
-}
-.now-name {
-  font-family: var(--serif);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.now-artist {
-  font-size: 11px;
-  color: rgba(232, 239, 220, 0.7);
-}
-.body {
-  padding: 18px 20px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
+.room-info {
+  min-width: 0;
   flex: 1;
 }
-.body h3 {
-  font-size: 21px;
-  letter-spacing: 0.08em;
-}
-.desc {
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.85;
-  min-height: 46px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.foot {
-  margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
+.room-labels {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-.online {
-  display: inline-flex;
-  align-items: center;
   gap: 7px;
-  font-size: 11.5px;
   color: var(--muted);
+  font-size: 11px;
 }
-.online i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #7ea05a;
-  box-shadow: 0 0 0 3px rgba(126, 160, 90, 0.16);
+.room-kind {
+  color: var(--green);
+  font-weight: 600;
 }
-.enter {
-  display: inline-flex;
+.resident {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #f4eedc;
+  color: #7f6833;
+}
+h3 {
+  font-size: 16px;
+  margin: 3px 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.room-online {
+  display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  color: var(--green);
-  padding: 6px 0 6px 12px;
-  transition: gap 0.2s ease, color 0.2s ease;
+  font-size: 11px;
+  color: var(--muted);
 }
-.enter:hover {
-  gap: 10px;
-  color: var(--vermilion);
+.room-online .online-dot {
+  width: 4px;
+  height: 4px;
+  box-shadow: none;
+}
+.join {
+  display: grid;
+  place-items: center;
+  width: 37px;
+  height: 37px;
+  background: var(--paper-2);
+  color: var(--green);
+  border-radius: 50%;
+  flex: none;
+}
+.join:hover {
+  background: var(--green);
+  color: #fff;
+}
+.room-desc {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 17px 0 14px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.room-song {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--green);
+  min-width: 0;
+}
+.room-song > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.room-song .artist {
+  color: var(--muted);
+  margin-left: auto;
+  font-size: 11px;
+  max-width: 38%;
+  flex: none;
+}
+@media (max-width: 600px) {
+  .room-card {
+    padding: 17px;
+  }
+  .room-cover {
+    width: 59px;
+    height: 59px;
+  }
+  .room-desc {
+    margin-top: 13px;
+  }
+  .room-song .artist {
+    display: none;
+  }
 }
 </style>

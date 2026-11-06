@@ -1,5 +1,5 @@
 [Unit]
-Description=Tea & Moonlight (茶与月色) music room server
+Description=Tea & Moonlight (茶与金平糖) music room server
 Documentation=https://github.com/hakrelin/music
 After=network-online.target
 Wants=network-online.target

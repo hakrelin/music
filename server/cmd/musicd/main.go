@@ -1,4 +1,4 @@
-// musicd 是「茶与月色」的后端入口：单二进制，无外部依赖。
+// musicd 是「茶与金平糖」的后端入口：单二进制，无外部依赖。
 //
 // 启动流程（docs/architecture.md §6/§9）：
 //  1. 加载配置（默认值 → config.example.json → config.local.json → env）

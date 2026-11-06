@@ -1,67 +1,46 @@
-/* 设计 token —— 取色与气质对齐「茶与金平糖」：米白纸面、森林墨绿、浅茶绿。
-   房间页使用同一套 token 的夜间变体（--night*）。 */
 :root {
-  /* 纸与墨 */
-  --paper: #fbfaf6;
-  --paper-2: #f4f2e9;
-  --paper-3: #ecebe0;
-  --ink: #22392f;
-  --ink-soft: #45584d;
-  --muted: #77806f;
-
-  /* 绿 */
-  --green: #1f4b3c;
-  --green-2: #2c6150;
-  --deep: #143a31;
-  --night: #0c241f;
-  --night-2: #102e27;
-  --night-3: #17382f;
-
-  /* 点缀 */
-  --lime: #e2edba;
-  --lime-soft: #f0f5dd;
-  --sage: #e9efe1;
-  --sage-2: #dfe8d3;
-  --gold: #d8b06a;
-  --gold-soft: #f2e6c9;
-  --vermilion: #b24a3a;
-  --vermilion-soft: #f0d9d3;
-
-  /* 线与影 */
-  --line: #e3e6dc;
-  --line-strong: #cfd6c6;
-  --line-night: rgba(226, 237, 186, 0.14);
-  --line-night-strong: rgba(226, 237, 186, 0.28);
-  --shadow-soft: 0 24px 70px rgba(20, 58, 49, 0.1);
-  --shadow-card: 0 10px 30px rgba(20, 58, 49, 0.07);
-  --shadow-night: 0 30px 90px rgba(0, 0, 0, 0.45);
-
-  /* 字体 */
-  --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
-  --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
-  --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-
-  /* 字号 */
-  --fs-display: clamp(38px, 4.6vw, 62px);
-  --fs-h1: clamp(30px, 3vw, 44px);
-  --fs-h2: clamp(24px, 2.2vw, 34px);
-  --fs-h3: 20px;
-  --fs-body: 15px;
+  --paper: #f8f9f6;
+  --paper-2: #f0f3ed;
+  --paper-3: #e8ede5;
+  --ink: #263c34;
+  --ink-soft: #56665e;
+  --muted: #62705b;
+  --green: #34745c;
+  --green-2: #285e49;
+  --deep: #234f3e;
+  --night: #fff;
+  --night-2: #f8faf6;
+  --night-3: #edf3eb;
+  --lime: #34745c;
+  --lime-soft: #e9f3e9;
+  --sage: #eaf1e7;
+  --sage-2: #dce8d9;
+  --gold: #d8a84b;
+  --gold-soft: #fff1d3;
+  --vermilion: #c56a65;
+  --vermilion-soft: #fbece7;
+  --line: #e7ebe4;
+  --line-strong: #d4ded2;
+  --line-night: #e7ebe4;
+  --line-night-strong: #d4ded2;
+  --shadow-soft: 0 16px 48px #2947310a;
+  --shadow-card: 0 6px 24px #29473108;
+  --shadow-night: 0 24px 80px #203c2426;
+  --sans: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  --serif: var(--sans);
+  --mono: Consolas, monospace;
+  --fs-display: clamp(30px, 3vw, 44px);
+  --fs-h1: 30px;
+  --fs-h2: 22px;
+  --fs-h3: 18px;
+  --fs-body: 14px;
   --fs-small: 13px;
-  --fs-tiny: 11px;
-
-  /* 圆角与间距 */
-  --r-s: 6px;
-  --r-m: 10px;
-  --r-l: 16px;
-  --r-xl: 22px;
-  --gap: clamp(18px, 2.2vw, 30px);
-  --container: 1600px;
-  --header-h: 100px;
-}
-
-@media (max-width: 760px) {
-  :root {
-    --header-h: 76px;
-  }
+  --fs-tiny: 12px;
+  --r-s: 8px;
+  --r-m: 12px;
+  --r-l: 20px;
+  --r-xl: 28px;
+  --gap: 24px;
+  --container: 1360px;
+  --header-h: 84px;
 }

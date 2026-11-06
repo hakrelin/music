@@ -1,234 +1,227 @@
 <script setup lang="ts">
-import { computed } from 'vue';
 import Icon from '@/components/Icon.vue';
-import { usePlayerStore } from '@/stores/player';
 import { useRoomStore } from '@/stores/room';
-
+import { formatTime } from '@/utils/lyric';
 const room = useRoomStore();
-const player = usePlayerStore();
-
-const list = computed(() => room.queue);
-const canManage = computed(() => room.isAdmin);
+defineEmits<{ search: [] }>();
 </script>
-
 <template>
-  <section class="queue card" aria-label="点歌队列">
-    <header class="q-head">
-      <div>
-        <p class="eyebrow light">点歌队列</p>
-        <h2>接下来听什么</h2>
-      </div>
-      <span class="count">{{ room.upcoming.length }} 首待播</span>
+  <section class="queue-panel" aria-label="点歌队列">
+    <header>
+      <h2 class="panel-title">
+        <Icon name="list" :size="17" />待播队列 <span>{{ room.upcoming.length }}</span>
+      </h2>
+      <button class="icon-btn" aria-label="添加歌曲" @click="$emit('search')">
+        <Icon name="plus" :size="17" />
+      </button>
     </header>
-
-    <p v-if="!list.length" class="empty">队列是空的。去搜一首歌，或者导入一份歌单。</p>
-
-    <ol v-else class="rows">
-      <li
-        v-for="(track, i) in list"
-        :key="track.id + '-' + i"
-        class="row"
-        :class="{ now: i === 0 }"
-      >
-        <span class="idx">
-          <template v-if="i === 0">
-            <span class="bars" :class="{ paused: !player.playing }"><i></i><i></i><i></i></span>
-          </template>
-          <template v-else>{{ String(i).padStart(2, '0') }}</template>
-        </span>
-
-        <span class="main">
-          <span class="name" :title="track.name">{{ track.name }}</span>
-          <span class="sub">
-            {{ track.artist }}
-            <template v-if="track.nick"> · {{ track.nick }} 点</template>
-          </span>
-        </span>
-
-        <span class="dur">{{ Math.floor((track.duration || 0) / 60) }}:{{ String((track.duration || 0) % 60).padStart(2, '0') }}</span>
-
-        <span class="acts">
-          <button v-if="canManage && i > 0" class="mini" type="button" title="置顶" @click="room.queueTop(track.id)">
-            <Icon name="pin" :size="14" />
-          </button>
-          <button v-if="canManage" class="mini danger" type="button" title="从队列移除" @click="room.queueRemove(track.id)">
-            <Icon name="close" :size="14" />
-          </button>
-        </span>
-      </li>
-    </ol>
+    <button class="add-music" @click="$emit('search')">
+      <Icon name="search" :size="15" />搜索音乐 / 导入歌单 <Icon name="plus" :size="13" />
+    </button>
+    <div class="queue-scroll" tabindex="0" aria-label="歌曲列表">
+      <p v-if="!room.queue.length" class="empty">队列空空的，来点第一首吧。</p>
+      <ol>
+        <li v-for="(t, i) in room.queue" :key="t.id + '-' + i" :class="{ current: i === 0 }">
+          <span class="index"
+            ><Icon v-if="i === 0" name="music" :size="15" /><template v-else>{{
+              String(i).padStart(2, '0')
+            }}</template></span
+          >
+          <div class="track-info">
+            <b :title="t.name">{{ t.name }}</b
+            ><span>{{ t.artist }}</span
+            ><small v-if="t.nick">{{ t.nick }} 点的歌</small>
+          </div>
+          <div class="track-end">
+            <span>{{ formatTime(t.duration) }}</span>
+            <div v-if="room.isAdmin && i > 0" class="track-actions">
+              <button aria-label="置顶歌曲" @click="room.queueTop(t.id)">
+                <Icon name="up" :size="13" /></button
+              ><button aria-label="移除歌曲" @click="room.queueRemove(t.id)">
+                <Icon name="close" :size="13" />
+              </button>
+            </div>
+            <span v-else-if="i === 0" class="now-label">当前</span>
+          </div>
+        </li>
+      </ol>
+    </div>
+    <div class="queue-foot">
+      <Icon name="radio" :size="13" /><span>{{
+        room.mode.radio ? '电台会在队列不足时自动补歌' : '大家点的歌会按顺序播放'
+      }}</span>
+    </div>
   </section>
 </template>
-
 <style scoped>
-.card {
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid var(--line-night);
-  border-radius: var(--r-l);
-  backdrop-filter: blur(10px);
-}
-.queue {
-  padding: clamp(20px, 2.2vw, 28px);
-}
-.q-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 16px;
-}
-.eyebrow.light {
-  color: rgba(232, 239, 220, 0.5);
-}
-.eyebrow.light::before {
-  color: rgba(232, 239, 220, 0.25);
-}
-.q-head h2 {
-  margin-top: 10px;
-  font-size: 20px;
-  color: #eef3e4;
-  letter-spacing: 0.1em;
-}
-.count {
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  color: rgba(232, 239, 220, 0.45);
-  white-space: nowrap;
-}
-.empty {
-  padding: 26px 0 10px;
-  font-size: 12.5px;
-  color: rgba(232, 239, 220, 0.45);
-}
-.rows {
+.queue-panel {
+  height: 100%;
   display: flex;
   flex-direction: column;
-  max-height: 340px;
-  overflow: auto;
-  margin: 0 -6px;
-  padding: 0 6px;
+  padding: 21px 16px 17px;
+  min-height: 0;
 }
-.row {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 46px 60px;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 0;
-  border-top: 1px solid var(--line-night);
-  position: relative;
-}
-.row:first-child {
-  border-top: 0;
-}
-.row.now .name {
-  color: var(--lime);
-}
-.row.now .idx {
-  color: var(--lime);
-}
-.idx {
-  font-family: var(--serif);
-  font-size: 12px;
-  color: rgba(232, 239, 220, 0.35);
+header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  padding: 0 5px 12px;
+}
+.panel-title {
+  font-size: 14px;
+}
+.panel-title > span {
+  font-size: 11px;
+  background: var(--paper-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  margin-left: 1px;
+}
+.add-music {
+  background: #edf3e7;
+  color: #56734f;
+  min-height: 39px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 9px;
+  padding: 0 11px;
+  font-size: 12px;
+  flex: none;
+}
+.add-music > .icon:last-child {
+  margin-left: auto;
+}
+.add-music:hover {
+  background: #e2eddb;
+}
+.queue-scroll {
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+  margin: 17px -5px 0;
+  padding: 0 5px;
+}
+.queue-scroll li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 8px;
+  border-radius: 11px;
+  min-width: 0;
+}
+.queue-scroll li + li {
+  margin-top: 2px;
+}
+.queue-scroll li.current {
+  background: #edf3e7;
+}
+.index {
+  font-size: 12px;
+  min-width: 17px;
+  display: flex;
   justify-content: center;
-  height: 22px;
+  color: #676c64;
 }
-.bars {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 13px;
+.current .index {
+  color: var(--green);
 }
-.bars i {
-  width: 2.5px;
-  background: var(--lime);
-  border-radius: 2px;
-  animation: eq 0.9s ease-in-out infinite;
-}
-.bars i:nth-child(1) {
-  height: 60%;
-  animation-delay: 0s;
-}
-.bars i:nth-child(2) {
-  height: 100%;
-  animation-delay: 0.18s;
-}
-.bars i:nth-child(3) {
-  height: 45%;
-  animation-delay: 0.36s;
-}
-.bars.paused i {
-  animation-play-state: paused;
-  opacity: 0.5;
-}
-@keyframes eq {
-  0%,
-  100% {
-    transform: scaleY(0.45);
-  }
-  50% {
-    transform: scaleY(1);
-  }
-}
-.main {
+.track-info {
+  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
 }
-.name {
-  font-size: 13.5px;
-  color: #e7eeda;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
+.track-info b {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.sub {
-  font-size: 11px;
-  color: rgba(232, 239, 220, 0.42);
   white-space: nowrap;
+}
+.current .track-info b {
+  color: var(--green);
+  font-weight: 600;
+}
+.track-info > span {
+  font-size: 11px;
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.dur {
-  font-size: 11px;
-  color: rgba(232, 239, 220, 0.35);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+.track-info small {
+  font-size: 10px;
+  color: #676d60;
 }
-.acts {
+.track-end {
+  flex: none;
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.2s ease;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  font-size: 11px;
+  color: #656e5e;
 }
-.row:hover .acts {
-  opacity: 1;
+.now-label {
+  font-size: 10px;
+  color: #547046;
 }
-.mini {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
+.track-actions {
+  display: flex;
+  gap: 2px;
+}
+.track-actions button {
+  padding: 4px;
   display: grid;
   place-items: center;
-  color: rgba(232, 239, 220, 0.5);
-  border: 1px solid transparent;
+  border-radius: 4px;
 }
-.mini:hover {
-  color: var(--lime);
-  border-color: var(--line-night-strong);
+.track-actions button:hover {
+  background: var(--paper-3);
 }
-.mini.danger:hover {
-  color: #f0a08f;
+.queue-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #626d59;
+  border-top: 1px solid var(--line);
+  padding: 14px 4px 0;
+  margin-top: 12px;
 }
-@media (max-width: 760px) {
-  .acts {
-    opacity: 1;
+.queue-foot .icon {
+  flex: none;
+}
+.empty {
+  font-size: 13px;
+  padding: 20px 10px;
+}
+@media (max-width: 900px) {
+  .queue-panel {
+    min-height: calc(100dvh - 250px);
+    padding: 20px;
+  }
+  .queue-scroll {
+    max-height: none;
+  }
+  .track-info b {
+    font-size: 13px;
+  }
+  .track-info > span {
+    font-size: 13px;
+  }
+  .track-info small {
+    font-size: 12px;
+  }
+  .queue-scroll li {
+    padding: 16px 10px;
+  }
+  .add-music {
+    font-size: 14px;
   }
 }
 </style>

@@ -1,210 +1,309 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
+import { nextTick, onMounted, ref, watch } from 'vue';
 import Icon from '@/components/Icon.vue';
 import { useRoomStore } from '@/stores/room';
-
 const room = useRoomStore();
 const draft = ref('');
 const box = ref<HTMLElement | null>(null);
-
+const unread = ref(false);
+function bottom() {
+  if (box.value) {
+    box.value.scrollTop = box.value.scrollHeight;
+    unread.value = false;
+  }
+}
 watch(
   () => room.chat.length,
   async () => {
+    const el = box.value;
+    const stick = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 70;
     await nextTick();
-    if (box.value) box.value.scrollTop = box.value.scrollHeight;
-  }
+    if (stick) bottom();
+    else unread.value = true;
+  },
 );
-
+onMounted(() => nextTick(bottom));
 function send() {
-  const text = draft.value.trim();
-  if (!text) return;
-  room.chatSend(text);
+  if (!draft.value.trim()) return;
+  room.chatSend(draft.value);
   draft.value = '';
+  void nextTick(bottom);
 }
-
-function isImage(url: string) {
-  return /\.(png|jpe?g|gif|webp|avif)(\?|#|$)/i.test(url);
+function color(name: string) {
+  return ['sage', 'rose', 'gold', 'blue'][
+    Array.from(name).reduce((n, c) => n + c.charCodeAt(0), 0) % 4
+  ];
 }
 </script>
-
 <template>
-  <section class="chat card" aria-label="房间聊天">
-    <header class="c-head">
-      <div>
-        <p class="eyebrow light">房间聊天</p>
-        <h2>茶桌上的话</h2>
-      </div>
-      <span class="online"><i></i>{{ room.online }} 人在听</span>
+  <section class="chat-panel" aria-label="房间聊天">
+    <header>
+      <h2 class="panel-title"><Icon name="chat" :size="17" />一起聊聊</h2>
+      <span><i class="online-dot" />{{ room.online }} 人在听</span>
     </header>
-
-    <div ref="box" class="msgs">
-      <p v-if="!room.chat.length" class="empty">还没有人说话。打个招呼，或者先点一首歌。</p>
-      <template v-for="(m, i) in room.chat" :key="i">
-        <p v-if="m.type === 'notice'" class="notice">{{ m.content }}</p>
-        <div v-else class="msg">
-          <div class="msg-head">
-            <span class="nick">{{ m.nick }}</span>
-            <span class="time">{{ new Date(m.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</span>
-          </div>
-          <p class="text">{{ m.content }}</p>
-          <template v-if="m.images && m.images.length">
-            <a v-for="(img, k) in m.images" :key="k" :href="img" target="_blank" rel="noreferrer">
-              <img v-if="isImage(img)" :src="img" alt="聊天图片" class="pic" loading="lazy" />
-            </a>
-          </template>
-        </div>
-      </template>
+    <div
+      ref="box"
+      class="messages"
+      tabindex="0"
+      aria-label="聊天记录"
+      @scroll="box && box.scrollHeight - box.scrollTop - box.clientHeight < 30 && (unread = false)"
+    >
+      <p v-if="!room.chat.length" class="empty">还没有人说话，打个招呼吧。</p>
+      <template v-for="(m, i) in room.chat" :key="m.ts + '-' + i"
+        ><p v-if="m.type === 'notice' || m.type === 'system'" class="notice">{{ m.content }}</p>
+        <div v-else class="message" :class="{ self: m.nick === room.nick }">
+          <span class="chat-avatar" :class="color(m.nick)">{{ m.nick.slice(0, 1) }}</span>
+          <div class="message-main">
+            <div class="message-meta">
+              <b>{{ m.nick }}</b
+              ><time>{{
+                new Date(m.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+              }}</time>
+            </div>
+            <p class="bubble">{{ m.content }}</p>
+            <a
+              v-for="(img, k) in m.images || []"
+              :key="k"
+              :href="img"
+              target="_blank"
+              rel="noreferrer"
+              ><img :src="img" alt="聊天图片" class="chat-image" loading="lazy"
+            /></a>
+          </div></div
+      ></template>
     </div>
-
+    <button v-if="unread" class="unread" @click="bottom">
+      有新消息 <Icon name="down" :size="12" />
+    </button>
     <form class="composer" @submit.prevent="send">
-      <input
+      <label class="visually-hidden" for="chat-draft">聊天消息</label
+      ><textarea
+        id="chat-draft"
         v-model="draft"
-        class="input night"
-        maxlength="300"
-        placeholder="说点什么……（图片链接会自动展开）"
+        maxlength="200"
+        placeholder="聊点什么？"
         :disabled="!room.joined"
+        rows="2"
+        @keydown.enter.exact.prevent="send"
       />
-      <button class="send" type="submit" :disabled="!room.joined || !draft.trim()" aria-label="发送">
-        <Icon name="arrow" :size="17" />
-      </button>
+      <div class="composer-bottom">
+        <span>Enter 发送 · Shift + Enter 换行</span
+        ><button :disabled="!room.joined || !draft.trim()" aria-label="发送消息">
+          <Icon name="arrow" :size="16" />
+        </button>
+      </div>
     </form>
-    <p class="hint">点歌与导入歌单请用「点歌」面板；聊天只用来聊天。</p>
   </section>
 </template>
-
 <style scoped>
-.card {
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid var(--line-night);
-  border-radius: var(--r-l);
-  backdrop-filter: blur(10px);
-}
-.chat {
-  padding: clamp(18px, 2vw, 24px);
+.chat-panel {
+  height: 100%;
+  padding: 22px 20px 18px;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
 }
-.c-head {
+header {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.eyebrow.light {
-  color: rgba(232, 239, 220, 0.5);
-}
-.eyebrow.light::before {
-  color: rgba(232, 239, 220, 0.25);
-}
-.c-head h2 {
-  margin-top: 10px;
-  font-size: 20px;
-  color: #eef3e4;
-  letter-spacing: 0.1em;
-}
-.online {
-  display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  color: rgba(232, 239, 220, 0.55);
-  white-space: nowrap;
-}
-.online i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #9fc06a;
-  box-shadow: 0 0 0 3px rgba(159, 192, 106, 0.14);
-}
-.msgs {
-  flex: 1;
-  min-height: 180px;
-  max-height: 420px;
-  overflow: auto;
-  padding-right: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.empty {
-  color: rgba(232, 239, 220, 0.4);
-  font-size: 12.5px;
-  padding: 14px 0;
-}
-.notice {
-  align-self: center;
-  text-align: center;
-  font-size: 11px;
-  color: rgba(226, 237, 186, 0.5);
-  letter-spacing: 0.04em;
-  line-height: 1.8;
-  max-width: 92%;
-}
-.msg {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.msg-head {
-  display: flex;
-  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: 20px;
   gap: 10px;
 }
-.nick {
-  font-size: 12px;
-  color: var(--lime);
-  letter-spacing: 0.04em;
+header h2 {
+  font-size: 14px;
 }
-.time {
-  font-size: 10px;
-  color: rgba(232, 239, 220, 0.3);
-}
-.text {
-  font-size: 13px;
-  line-height: 1.8;
-  color: rgba(240, 245, 232, 0.86);
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-.pic {
-  margin-top: 6px;
-  max-width: 100%;
-  border-radius: var(--r-s);
-}
-.composer {
-  margin-top: 14px;
+header > span {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
 }
-.composer .input {
-  height: 42px;
-  font-size: 13px;
+header .online-dot {
+  width: 4px;
+  height: 4px;
+  box-shadow: none;
 }
-.send {
-  width: 42px;
-  height: 42px;
-  border-radius: var(--r-m);
-  background: var(--lime);
-  color: var(--deep);
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-right: 3px;
+}
+.notice {
+  text-align: center;
+  font-size: 11px;
+  color: #676d60;
+  padding: 0 10px;
+  overflow-wrap: anywhere;
+}
+.message {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+.chat-avatar {
+  width: 29px;
+  height: 29px;
   display: grid;
   place-items: center;
+  border-radius: 10px;
+  font-size: 13px;
   flex: none;
-  transition: background 0.2s ease;
+  background: #eaf0df;
+  color: #5e704f;
 }
-.send:hover {
-  background: #eaf3c9;
+.rose {
+  background: #f5e4df;
+  color: #8a6058;
 }
-.send:disabled {
-  opacity: 0.4;
-  cursor: default;
+.gold {
+  background: #f5ecd7;
+  color: #7b683a;
 }
-.hint {
-  margin-top: 10px;
-  font-size: 10.5px;
-  color: rgba(232, 239, 220, 0.3);
-  line-height: 1.7;
+.blue {
+  background: #e5edf0;
+  color: #566c75;
+}
+.message-main {
+  min-width: 0;
+  flex: 1;
+}
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 5px;
+  min-width: 0;
+}
+.message-meta b {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.message-meta time {
+  font-size: 10px;
+  color: #686c64;
+  flex: none;
+}
+.bubble {
+  display: inline-block;
+  padding: 9px 11px;
+  background: #f2f4ed;
+  border-radius: 0 10px 10px 10px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.self .bubble {
+  background: #eaf2e5;
+}
+.chat-image {
+  margin-top: 7px;
+  max-width: 100%;
+  max-height: 250px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.composer {
+  margin-top: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px;
+  background: #fafbf8;
+  flex: none;
+}
+.composer:focus-within {
+  border-color: #abc2a1;
+}
+.composer textarea {
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: none;
+  resize: none;
+  font-size: 13px;
+  line-height: 1.8;
+  min-height: 43px;
+}
+.composer textarea::placeholder {
+  color: #686c61;
+}
+.composer-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  margin-top: 3px;
+}
+.composer-bottom span {
+  font-size: 10px;
+  color: #646b60;
+}
+.composer-bottom button {
+  height: 27px;
+  width: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: #dfeacd;
+  color: #507448;
+}
+.composer-bottom button:disabled {
+  opacity: 0.5;
+}
+.unread {
+  position: absolute;
+  bottom: 132px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 20px;
+  background: var(--green);
+  color: #fff;
+  font-size: 12px;
+  box-shadow: var(--shadow-card);
+}
+@media (max-width: 900px) {
+  .chat-panel {
+    height: calc(100dvh - 245px);
+    min-height: 350px;
+  }
+  .bubble {
+    font-size: 13px;
+  }
+  .message-meta b {
+    font-size: 13px;
+  }
+  .message-meta time {
+    font-size: 11px;
+  }
+  .composer textarea {
+    font-size: 13px;
+  }
+  .composer-bottom span {
+    font-size: 11px;
+  }
+  .chat-avatar {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+  .notice {
+    font-size: 12px;
+  }
 }
 </style>

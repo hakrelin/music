@@ -20,3 +20,7 @@ server/config.local.*.json
 # 系统
 .DS_Store
 Thumbs.db
+
+# Browser test output
+web/test-results/
+web/playwright-report/

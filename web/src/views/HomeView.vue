@@ -1,75 +1,65 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import Icon from '@/components/Icon.vue';
-import RoomCard from '@/components/RoomCard.vue';
-import SiteFooter from '@/components/SiteFooter.vue';
 import SiteHeader from '@/components/SiteHeader.vue';
+import SiteFooter from '@/components/SiteFooter.vue';
+import RoomCard from '@/components/RoomCard.vue';
+import AppDialog from '@/components/AppDialog.vue';
+import Icon from '@/components/Icon.vue';
 import { useRoomsStore } from '@/stores/rooms';
 import { useUiStore } from '@/stores/ui';
 import type { RoomSummary } from '@/types';
-
-const router = useRouter();
 const rooms = useRoomsStore();
 const ui = useUiStore();
-
+const router = useRouter();
 const creating = ref(false);
+const createOpen = ref(false);
+const aboutOpen = ref(false);
+const filter = ref('all');
+const query = ref('');
 const form = reactive({ name: '', desc: '', needPwd: false, password: '' });
-
-const steps = [
-  {
-    title: '点一首歌',
-    text: '搜网易云的曲名、歌手或歌单，一键加入点歌队列；也可以直接贴歌单链接。'
-  },
-  {
-    title: '和大家同步',
-    text: '播放进度由服务器校准，所有人耳机里的同一句歌词，误差在一秒半以内。'
-  },
-  {
-    title: '投票切歌',
-    text: '遇上不喜欢的曲子，投一票就好；超过三成在听的人投票，就会换下一首。'
-  },
-  {
-    title: '电台常驻',
-    text: '东方电台 24 小时自动补队，房间没人也照样放着，随时推门就能听。'
-  }
-];
-
-const presets = {
-  normal: { name: '博丽茶席', desc: '一壶茶，想听什么点什么。' },
-  radio: { name: '电台房', desc: '整晚放同一份歌单，不间断。' },
-  touhou: { name: '东方电台', desc: '24 小时东方 Project，不间断。' }
-} as const;
-
+const featured = computed(
+  () => rooms.rooms.find((r) => r.builtin && r.radio) || rooms.radioRooms[0],
+);
+const filtered = computed(() =>
+  rooms.rooms.filter(
+    (r) =>
+      (filter.value !== 'radio' || r.radio) &&
+      (filter.value !== 'normal' || !r.radio) &&
+      (!query.value ||
+        [r.name, r.desc, r.now?.name].some((x) =>
+          x?.toLowerCase().includes(query.value.toLowerCase()),
+        )),
+  ),
+);
+let timer = 0;
 onMounted(() => {
   void rooms.loadRooms();
-  if (!rooms.config) void rooms.loadConfig();
+  void rooms.loadConfig();
+  timer = window.setInterval(() => {
+    if (!document.hidden) void rooms.loadRooms();
+  }, 15000);
 });
-
-function preset(kind: keyof typeof presets) {
-  form.name = presets[kind].name;
-  form.desc = presets[kind].desc;
+onBeforeUnmount(() => clearInterval(timer));
+function enter(r: RoomSummary) {
+  void router.push({ name: 'room', params: { id: r.id } });
 }
-
-function enter(room: RoomSummary) {
-  void router.push({ name: 'room', params: { id: room.id } });
-}
-
 async function createRoom() {
-  if (!form.name.trim()) return ui.warn('先给房间起个名字');
-  if (form.needPwd && !form.password.trim()) return ui.warn('密码还没填');
+  if (!form.name.trim()) return ui.warn('请输入房间名');
+  if (form.needPwd && !form.password.trim()) return ui.warn('请输入房间密码');
   creating.value = true;
   try {
     const id = await rooms.createRoom({
       name: form.name.trim(),
       desc: form.desc.trim(),
       needPwd: form.needPwd,
-      password: form.needPwd ? form.password.trim() : undefined
+      password: form.needPwd ? form.password.trim() : undefined,
     });
+    createOpen.value = false;
     await router.push({
       name: 'room',
       params: { id },
-      query: form.needPwd ? { pwd: form.password.trim() } : {}
+      state: form.needPwd ? { roomPassword: form.password.trim() } : undefined,
     });
   } catch (e) {
     ui.error(e instanceof Error ? e.message : '创建失败');
@@ -78,698 +68,779 @@ async function createRoom() {
   }
 }
 </script>
-
 <template>
   <div class="home">
-    <SiteHeader />
-
-    <main>
-      <!-- 首屏 -->
-      <section class="hero-sec">
-        <div class="hero">
-          <img class="hero-art" src="/art/hero.jpg" alt="东方 Project 同人插画：雪林中的博丽灵梦" />
-          <div class="hero-tint"></div>
-          <div class="hero-shade"></div>
-
-          <div class="hero-copy">
-            <p class="eyebrow light">东方 Project · 同步点歌 · 24h 电台</p>
-            <h1>在幻想乡，<br />一起听一首歌。</h1>
-            <p class="hero-desc">
-              茶与月色是一间开在博丽神社旁的线上茶室。<br />
-              点一首歌，所有人的耳机里就同时响起同一段旋律。
-            </p>
-            <div class="hero-actions">
-              <a class="btn btn-lime" href="#rooms">挑一间房间 <span aria-hidden="true">↗</span></a>
-              <a class="hero-link" href="#how">怎么玩</a>
+    <SiteHeader @create="createOpen = true" />
+    <main class="home-main">
+      <section class="welcome-row" aria-label="欢迎与常驻电台">
+        <div class="welcome">
+          <div class="welcome-copy">
+            <span class="welcome-note"><i />茶与金平糖汉化组 · 一起听歌</span>
+            <h1>今天也<br />一起听<span>。</span></h1>
+            <p>放一首喜欢的，和大家待一会儿。</p>
+            <a href="#rooms" class="welcome-link"
+              >看看大家在听什么 <Icon name="arrow" :size="15"
+            /></a>
+          </div>
+          <img
+            class="welcome-art"
+            src="/art/reimari.webp"
+            alt="灵梦与魔理沙靠在一起微笑，minusT 绘"
+            fetchpriority="high"
+          /><span class="art-credit">ILLUST. minusT</span
+          ><span class="spark spark-one" aria-hidden="true">✦</span
+          ><span class="spark spark-two" aria-hidden="true">✧</span>
+        </div>
+        <aside class="featured">
+          <div class="feature-head">
+            <span><Icon name="radio" :size="15" />常驻电台</span><span class="live"><i />LIVE</span>
+          </div>
+          <template v-if="featured"
+            ><h2>{{ featured.name }}</h2>
+            <p class="feature-desc">随时进来，总有歌在放。</p>
+            <div class="feature-track">
+              <div class="feature-cover">
+                <img
+                  v-if="featured.now?.cover"
+                  :src="featured.now.cover"
+                  alt="当前歌曲封面"
+                  @error="($event.target as HTMLImageElement).style.display = 'none'"
+                /><Icon v-else name="music" :size="24" />
+              </div>
+              <div>
+                <span>正在播放</span><b>{{ featured.now?.name || '等待下一首歌曲' }}</b
+                ><small>{{ featured.now?.artist || '点一首歌，加入队列' }}</small>
+              </div>
             </div>
-          </div>
-
-          <p class="hero-vertical">茶香渐起 · 夜色未央</p>
-
-          <div class="hero-foot">
-            <span>TEA &amp; MOONLIGHT / 博丽神社 · 雪</span>
-            <a class="scroll-cue" href="#intro">往下看 <i aria-hidden="true">↓</i></a>
-          </div>
-        </div>
+            <div class="feature-bottom">
+              <span><Icon name="users" :size="14" />{{ featured.online }} 人在听</span
+              ><button class="btn" @click="enter(featured)">
+                <Icon name="play" :size="14" />加入收听
+              </button>
+            </div></template
+          ><template v-else
+            ><h2>一起听东方</h2>
+            <p class="feature-desc">
+              {{ rooms.loading ? '正在获取电台…' : '电台暂未开放，先看看其他房间吧。' }}
+            </p>
+            <Icon class="feature-empty" name="radio" :size="56"
+          /></template>
+        </aside>
       </section>
-
-      <!-- 引子 -->
-      <section id="intro" class="intro">
-        <p class="intro-text">
-          一壶茶，一张唱片，<br />
-          一群把同一首歌听到副歌的人。
-        </p>
-        <div class="intro-stats">
-          <div class="stat"><strong>{{ rooms.totalOnline }}</strong><span>此刻在听</span></div>
-          <div class="stat"><strong>{{ rooms.rooms.length }}</strong><span>开放房间</span></div>
-          <div class="stat"><strong>1.5<em>s</em></strong><span>同步误差以内</span></div>
-        </div>
-      </section>
-
-      <!-- 房间 -->
-      <section id="rooms" class="section">
-        <div class="section-head">
+      <section id="rooms" class="rooms-section">
+        <div class="rooms-heading">
           <div>
-            <p class="eyebrow">今夜开席</p>
-            <h2>挑一间房间，坐下听</h2>
+            <h2>
+              听歌大厅 <span>{{ rooms.rooms.length }}</span>
+            </h2>
+            <p><i class="online-dot" />{{ rooms.totalOnline }} 人正在分享同一段旋律</p>
           </div>
-          <button class="refresh" type="button" :disabled="rooms.loading" @click="rooms.loadRooms()">
-            <Icon name="refresh" :size="15" :class="{ spin: rooms.loading }" />
-            刷新
+          <button
+            class="refresh"
+            :disabled="rooms.loading"
+            aria-label="刷新房间列表"
+            @click="rooms.loadRooms()"
+          >
+            <Icon name="refresh" :size="15" />刷新
           </button>
         </div>
-
-        <p v-if="rooms.error" class="error-note">{{ rooms.error }}</p>
-
-        <div class="room-grid">
-          <RoomCard v-for="r in rooms.rooms" :key="r.id" :room="r" @enter="enter" />
-          <template v-if="rooms.loading && !rooms.rooms.length">
-            <div v-for="i in 3" :key="i" class="skeleton-card skeleton"></div>
-          </template>
-        </div>
-
-        <p v-if="!rooms.loading && !rooms.rooms.length" class="empty-note">
-          还没有房间。开一间，第一首歌你来放。
-        </p>
-
-        <p class="section-note">房间空无一人 10 分钟后会自动收起来；「东方电台」是常驻的，什么时候来都在。</p>
-      </section>
-
-      <!-- 开房 -->
-      <section id="create" class="create-band">
-        <div class="create-inner">
-          <div class="create-copy">
-            <p class="eyebrow">开一间房</p>
-            <h2>把茶烧上，<br />等人来听。</h2>
-            <p class="create-desc">
-              房间名和介绍会出现在大厅里。设了密码，就只有拿到钥匙的人能推门进来。
-            </p>
-            <ul class="preset-list">
-              <li><b>普通点歌房</b>想听什么就点什么</li>
-              <li><b>电台房</b>整晚放同一份歌单</li>
-              <li><b>东方电台</b>内置 24 小时曲库（常驻）</li>
-            </ul>
-          </div>
-
-          <form class="create-form" @submit.prevent="createRoom">
-            <label class="field">
-              <span>房间名</span>
-              <input v-model="form.name" class="input" maxlength="33" placeholder="例如：博丽茶席" />
-            </label>
-            <label class="field">
-              <span>介绍</span>
-              <input
-                v-model="form.desc"
-                class="input"
-                maxlength="133"
-                placeholder="随便写一句，让路过的人知道该带什么心情进来"
-              />
-            </label>
-            <div class="form-row">
-              <label class="check">
-                <input v-model="form.needPwd" type="checkbox" />
-                设置房间密码
-              </label>
-              <input
-                v-if="form.needPwd"
-                v-model="form.password"
-                class="input pwd"
-                maxlength="32"
-                placeholder="房间密码"
-              />
-            </div>
-            <div class="preset-btns">
-              <button type="button" class="chip" @click="preset('normal')">普通点歌房</button>
-              <button type="button" class="chip" @click="preset('radio')">电台房</button>
-              <button type="button" class="chip" @click="preset('touhou')">东方电台</button>
-            </div>
-            <button class="btn btn-primary submit" type="submit" :disabled="creating">
-              {{ creating ? '正在备茶…' : '创建并进入' }}
+        <div class="room-tools">
+          <div class="filters" aria-label="房间分类">
+            <button
+              v-for="f in [
+                { id: 'all', label: '全部房间' },
+                { id: 'radio', label: '电台' },
+                { id: 'normal', label: '点歌房' },
+              ]"
+              :key="f.id"
+              :class="{ active: filter === f.id }"
+              :aria-pressed="filter === f.id"
+              @click="filter = f.id"
+            >
+              {{ f.label }}
             </button>
-            <p class="form-tip">创建后直接进入；房间空置 10 分钟会自动回收。</p>
-          </form>
-        </div>
-      </section>
-
-      <!-- 玩法 -->
-      <section id="how" class="section how">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">怎么玩</p>
-            <h2>四件事，就够了</h2>
           </div>
+          <label class="room-search"
+            ><Icon name="search" :size="15" /><input
+              v-model="query"
+              placeholder="找个房间或正在放的歌"
+              aria-label="搜索房间"
+          /></label>
         </div>
-        <ol class="steps">
-          <li v-for="(s, i) in steps" :key="s.title">
-            <span class="num">0{{ i + 1 }}</span>
-            <h3>{{ s.title }}</h3>
-            <p>{{ s.text }}</p>
-          </li>
-        </ol>
+        <div v-if="rooms.error" class="error-note" role="alert">
+          {{ rooms.error }} <button @click="rooms.loadRooms()">重试</button>
+        </div>
+        <div class="room-grid">
+          <RoomCard v-for="r in filtered" :key="r.id" :room="r" @enter="enter" /><template
+            v-if="rooms.loading && !rooms.rooms.length"
+            ><div v-for="i in 3" :key="i" class="skeleton room-skeleton" /></template
+          ><button v-if="!query && filter === 'all'" class="create-card" @click="createOpen = true">
+            <span class="create-plus"><Icon name="plus" :size="23" /></span><b>开个自己的房间</b
+            ><span>邀请朋友，第一首歌你来选</span>
+          </button>
+        </div>
+        <p v-if="!rooms.loading && !filtered.length" class="no-rooms">
+          {{ query ? '没有找到这个房间，换个关键词试试。' : '还没有房间，来放第一首歌吧。' }}
+        </p>
       </section>
-
-      <!-- 引语 -->
-      <section class="quote-band">
-        <img src="/art/walk.jpg" alt="东方 Project 同人插画：暮色中并肩行走的两人" loading="lazy" />
-        <div class="quote-veil"></div>
-        <p class="quote">「茶凉了可以再添，<br />喜欢的歌要一起听完。」</p>
-        <span class="quote-src">—— 茶与月色 · 入席须知</span>
-      </section>
+      <SiteFooter
+        ><button class="about-link" @click="aboutOpen = true">关于本站</button></SiteFooter
+      >
     </main>
-
-    <SiteFooter />
+    <AppDialog :open="createOpen" title="创建房间" @close="!creating && (createOpen = false)"
+      ><form class="create-form" @submit.prevent="createRoom">
+        <label class="field"
+          ><span>房间名</span
+          ><input
+            v-model="form.name"
+            class="input"
+            maxlength="33"
+            placeholder="例如：修图的时候听什么"
+            required /></label
+        ><label class="field"
+          ><span>介绍 <small>选填</small></span
+          ><input
+            v-model="form.desc"
+            class="input"
+            maxlength="133"
+            placeholder="告诉大家，你想放些什么" /></label
+        ><label class="password-toggle"
+          ><input v-model="form.needPwd" type="checkbox" />设置房间密码</label
+        ><label v-if="form.needPwd" class="field"
+          ><span>密码</span
+          ><input
+            v-model="form.password"
+            class="input"
+            type="password"
+            maxlength="32"
+            autocomplete="new-password"
+            required
+        /></label>
+        <p>创建后直接进入。普通房间空置 10 分钟后自动关闭。</p>
+        <button class="btn btn-primary" :disabled="creating">
+          {{ creating ? '正在创建…' : '创建并进入' }}<Icon name="arrow" :size="16" />
+        </button></form></AppDialog
+    ><AppDialog :open="aboutOpen" title="关于这个听歌房" @close="aboutOpen = false"
+      ><div class="about-copy">
+        <h3>茶与金平糖 · 一起听</h3>
+        <p>茶与金平糖汉化组的同步听歌网站。选个房间，点歌、聊天，和大家听同一首歌。</p>
+        <p>
+          搜索音乐或导入网易云歌单即可点歌；不喜欢当前歌曲，可以投票切歌。常驻电台会自动补充队列。
+        </p>
+        <p>
+          主视觉：<a href="https://www.pixiv.net/artworks/65515001" target="_blank" rel="noreferrer"
+            >minusT《天空璋レイマリ》↗</a
+          >。插画版权归原作者所有。
+        </p>
+        <p>东方 Project 非官方同人站点。歌曲、封面及歌词归各自权利人所有。</p>
+        <p class="domain">music.tea-kompeito.com</p>
+      </div></AppDialog
+    >
   </div>
 </template>
-
 <style scoped>
-.home {
-  min-height: 100vh;
+.home-main {
+  max-width: 1400px;
+  padding: 16px 40px 0;
+  margin: auto;
 }
-
-/* ——— 首屏 ——— */
-.hero-sec {
-  padding: 6px clamp(12px, 2.2vw, 34px) 0;
+.welcome-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 22px;
 }
-.hero {
+.welcome {
   position: relative;
-  height: clamp(560px, calc(100svh - 122px), 860px);
-  border-radius: 8px;
   overflow: hidden;
+  min-height: 300px;
+  border: 1px solid #ebece2;
+  background: #f1f3e8;
+  border-radius: 24px;
   isolation: isolate;
-  background: var(--deep);
 }
-.hero-art {
+.welcome-copy {
+  position: relative;
+  z-index: 2;
+  padding: 33px 35px;
+  pointer-events: none;
+}
+.welcome-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: #627153;
+}
+.welcome-note i {
+  height: 5px;
+  width: 5px;
+  border-radius: 50%;
+  background: #a6b68a;
+}
+h1 {
+  font-size: 43px;
+  line-height: 1.27;
+  letter-spacing: -2px;
+  margin: 19px 0 13px;
+  color: #314e3c;
+}
+h1 span {
+  color: #cc8d75;
+}
+.welcome-copy p {
+  font-size: 12px;
+  color: #647052;
+}
+.welcome-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: #4e775c;
+  margin-top: 20px;
+  pointer-events: auto;
+}
+.welcome-art {
   position: absolute;
-  inset: 0;
+  right: 0;
+  bottom: 0;
+  width: 65%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 55% 38%;
+  z-index: 0;
+  mask-image: linear-gradient(90deg, transparent, #000 21%);
+}
+.art-credit {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  z-index: 2;
+  font-size: 7px;
+  letter-spacing: 1px;
+  color: #6a665db0;
+}
+.spark {
+  position: absolute;
+  color: #dbb659;
+  font-size: 24px;
+  z-index: 1;
+}
+.spark-one {
+  left: 38%;
+  top: 28px;
+}
+.spark-two {
+  left: 35%;
+  bottom: 36px;
+  font-size: 15px;
+}
+.featured {
+  padding: 25px;
+  background: #2e6049;
+  color: #f7faef;
+  border-radius: 24px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+}
+.featured:after {
+  content: '';
+  position: absolute;
+  width: 190px;
+  height: 190px;
+  right: -110px;
+  top: 50px;
+  border: 1px solid #ffffff0e;
+  border-radius: 50%;
+  box-shadow: 0 0 0 35px #ffffff04;
+  pointer-events: none;
+}
+.feature-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #d0e0c8;
+}
+.feature-head > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.live {
+  font-size: 8px;
+  letter-spacing: 1px;
+}
+.live i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #c5dd9a;
+}
+.featured h2 {
+  font-size: 25px;
+  margin-top: 23px;
+  letter-spacing: -0.6px;
+  color: #fff;
+}
+.feature-desc {
+  font-size: 11px;
+  color: #c5d6be;
+  margin-top: 4px;
+}
+.feature-track {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 23px 0;
+}
+.feature-cover {
+  height: 52px;
+  width: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: #ffffff14;
+  color: #d0ddc2;
+  overflow: hidden;
+  flex: none;
+}
+.feature-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: 72% 42%;
-  z-index: -3;
 }
-.hero-tint {
-  position: absolute;
-  inset: 0;
-  z-index: -2;
-  background: #1d4a3b;
-  mix-blend-mode: multiply;
-  opacity: 0.3;
-}
-.hero-shade {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background:
-    linear-gradient(90deg, rgba(9, 31, 26, 0.97) 0%, rgba(9, 31, 26, 0.9) 30%, rgba(9, 31, 26, 0.42) 56%, rgba(9, 31, 26, 0.04) 78%),
-    linear-gradient(0deg, rgba(9, 31, 26, 0.85) 0%, rgba(9, 31, 26, 0) 34%);
-}
-.hero-copy {
-  position: relative;
-  max-width: 640px;
-  padding: clamp(56px, 9vh, 120px) 0 0 clamp(24px, 7%, 100px);
-  color: #f2f6e9;
-}
-.eyebrow.light {
-  color: rgba(232, 239, 220, 0.72);
-}
-.eyebrow.light::before {
-  color: rgba(232, 239, 220, 0.35);
-}
-.hero h1 {
-  margin: 26px 0 22px;
-  font-size: clamp(38px, 4.8vw, 66px);
-  line-height: 1.42;
-  letter-spacing: 0.04em;
-  color: #f6f8ef;
-  font-weight: 600;
-  text-shadow: 0 6px 40px rgba(4, 18, 15, 0.45);
-}
-.hero-desc {
-  font-size: 13.5px;
-  line-height: 2.1;
-  color: rgba(240, 245, 230, 0.78);
-  letter-spacing: 0.02em;
-}
-.hero-actions {
-  margin-top: 34px;
+.feature-track > div:last-child {
   display: flex;
-  align-items: center;
-  gap: 26px;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
 }
-.hero-link {
-  font-size: 12.5px;
-  letter-spacing: 0.14em;
-  color: rgba(240, 245, 230, 0.82);
-  border-bottom: 1px solid rgba(240, 245, 230, 0.32);
-  padding-bottom: 4px;
-  transition: color 0.2s ease, border-color 0.2s ease;
+.feature-track span {
+  font-size: 9px;
+  color: #b9ccae;
 }
-.hero-link:hover {
-  color: var(--lime);
-  border-color: var(--lime);
-}
-.hero-vertical {
-  position: absolute;
-  right: clamp(18px, 2.4vw, 30px);
-  top: 108px;
-  writing-mode: vertical-rl;
-  font-family: var(--serif);
+.feature-track b {
   font-size: 12px;
-  letter-spacing: 0.5em;
-  color: rgba(240, 245, 230, 0.55);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.hero-foot {
-  position: absolute;
-  left: clamp(24px, 7%, 100px);
-  right: clamp(24px, 3vw, 40px);
-  bottom: clamp(20px, 3.4vh, 34px);
+.feature-track small {
+  font-size: 9px;
+  color: #bfd0b7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.feature-bottom {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  font-size: 10px;
-  letter-spacing: 0.22em;
-  color: rgba(240, 245, 230, 0.56);
-}
-.scroll-cue {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  letter-spacing: 0.2em;
-  transition: color 0.2s ease;
-}
-.scroll-cue i {
-  font-style: normal;
-  animation: bob 2.4s ease-in-out infinite;
-}
-.scroll-cue:hover {
-  color: var(--lime);
-}
-@keyframes bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(4px);
-  }
-}
-
-/* ——— 引子 ——— */
-.intro {
-  max-width: var(--container);
-  margin: 0 auto;
-  padding: clamp(30px, 4vw, 52px) 5%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: clamp(24px, 5vw, 80px);
-  border-bottom: 1px solid var(--line);
-}
-.intro-text {
-  font-family: var(--serif);
-  font-size: clamp(16px, 1.5vw, 21px);
-  line-height: 2;
-  letter-spacing: 0.08em;
-  color: var(--ink);
-}
-.intro-stats {
-  display: flex;
-  gap: clamp(28px, 4vw, 64px);
-  flex: none;
-}
-.stat {
-  display: flex;
-  align-items: baseline;
+  margin-top: auto;
   gap: 8px;
 }
-.stat strong {
-  font-family: var(--serif);
-  font-size: clamp(28px, 2.6vw, 38px);
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  color: var(--green);
-  line-height: 1;
-}
-.stat strong em {
-  font-style: normal;
-  font-size: 0.45em;
-  margin-left: 2px;
-}
-.stat span {
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-/* ——— 通用 section ——— */
-.section {
-  max-width: var(--container);
-  margin: 0 auto;
-  padding: clamp(46px, 7vw, 92px) 5% 0;
-}
-.section-head {
+.feature-bottom > span {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: clamp(24px, 3vw, 40px);
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #c5d6be;
 }
-.section-head h2 {
-  margin-top: 16px;
-  font-size: var(--fs-h2);
-  letter-spacing: 0.08em;
+.feature-bottom .btn {
+  background: #e6edcb;
+  color: #30503d;
+  font-size: 11px;
+  min-height: 35px;
+  padding: 0 13px;
+  border-radius: 9px;
+}
+.feature-empty {
+  margin: 30px auto;
+  color: #8eac82;
+}
+.rooms-section {
+  padding-top: 36px;
+  scroll-margin-top: 20px;
+}
+.rooms-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.rooms-heading h2 {
+  font-size: 21px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.rooms-heading h2 span {
+  font-size: 10px;
+  background: var(--paper-3);
+  color: var(--muted);
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-weight: 500;
+}
+.rooms-heading p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.rooms-heading .online-dot {
+  width: 5px;
+  height: 5px;
+  box-shadow: none;
 }
 .refresh {
-  display: inline-flex;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 8px;
+}
+.room-tools {
+  margin: 23px 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.filters {
+  display: flex;
+  gap: 6px;
+}
+.filters button {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.filters button.active {
+  background: #e9f0e1;
+  color: var(--green);
+  font-weight: 600;
+}
+.room-search {
+  display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 18px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  color: var(--ink-soft);
-  transition: border-color 0.2s ease, color 0.2s ease;
+  color: #68775f;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 9px;
+  padding: 8px 11px;
 }
-.refresh:hover {
-  border-color: var(--green);
-  color: var(--green);
-}
-.refresh:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.spin {
-  animation: spin 0.9s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.room-search input {
+  border: 0;
+  outline: none;
+  width: 165px;
+  background: none;
+  font-size: 11px;
 }
 .room-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: clamp(16px, 1.8vw, 24px);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
 }
-.skeleton-card {
-  height: 380px;
-  border-radius: var(--r-l);
+.create-card {
+  border: 1px dashed #d4ddcc;
+  border-radius: 18px;
+  min-height: 195px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  background: #f3f6ee;
+  color: var(--green);
+  transition: background 0.2s;
 }
-.empty-note {
-  padding: 40px 0;
+.create-card:hover {
+  background: #eaf1e3;
+}
+.create-plus {
+  height: 42px;
+  width: 42px;
+  display: grid;
+  place-items: center;
+  background: #e6eddd;
+  border-radius: 50%;
+  margin-bottom: 2px;
+}
+.create-card b {
+  font-size: 12px;
+  font-weight: 500;
+}
+.create-card > span:last-child {
+  font-size: 10px;
+  color: var(--muted);
+}
+.room-skeleton {
+  height: 195px;
+}
+.no-rooms {
+  padding: 20px 0;
   color: var(--muted);
   font-size: 13px;
-  text-align: center;
-}
-.section-note {
-  margin-top: 22px;
-  font-size: 11.5px;
-  color: var(--muted);
-  letter-spacing: 0.04em;
-}
-.error-note {
-  margin-bottom: 16px;
-  padding: 12px 16px;
-  border-radius: var(--r-m);
-  background: var(--vermilion-soft);
-  color: var(--vermilion);
-  font-size: 12.5px;
-}
-
-/* ——— 开房 ——— */
-.create-band {
-  margin-top: clamp(56px, 8vw, 110px);
-  background: var(--sage);
-  padding: clamp(46px, 6vw, 84px) 5%;
-}
-.create-inner {
-  max-width: var(--container);
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: clamp(30px, 6vw, 90px);
-  align-items: start;
-}
-.create-copy h2 {
-  margin: 18px 0 20px;
-  font-size: var(--fs-h2);
-  line-height: 1.5;
-}
-.create-desc {
-  color: var(--ink-soft);
-  font-size: 13.5px;
-  line-height: 2.1;
-  max-width: 400px;
-}
-.preset-list {
-  margin-top: 30px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  font-size: 12.5px;
-  color: var(--muted);
-}
-.preset-list li {
-  display: flex;
-  gap: 14px;
-  align-items: baseline;
-}
-.preset-list b {
-  color: var(--green);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  min-width: 76px;
 }
 .create-form {
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: var(--r-l);
-  padding: clamp(22px, 2.6vw, 34px);
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  box-shadow: var(--shadow-card);
+  display: grid;
+  gap: 19px;
 }
-.form-row {
+.create-form small {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 5px;
+}
+.password-toggle {
   display: flex;
   align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-.check {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 12.5px;
-  color: var(--ink-soft);
-  cursor: pointer;
-}
-.check input {
-  width: 15px;
-  height: 15px;
+  gap: 8px;
+  font-size: 12px;
   accent-color: var(--green);
 }
-.pwd {
-  flex: 1;
-  min-width: 150px;
-  max-width: 220px;
-  height: 40px;
-}
-.preset-btns {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.chip {
-  padding: 7px 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  font-size: 11.5px;
-  color: var(--ink-soft);
-  transition: all 0.2s ease;
-}
-.chip:hover {
-  border-color: var(--green);
-  color: var(--green);
-  background: var(--sage);
-}
-.submit {
-  width: 100%;
-  margin-top: 2px;
-}
-.form-tip {
+.create-form p {
   font-size: 11px;
   color: var(--muted);
-  text-align: center;
 }
-
-/* ——— 玩法 ——— */
-.steps {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: clamp(16px, 2vw, 26px);
+.create-form > .btn {
+  justify-self: end;
 }
-.steps li {
-  border-top: 1px solid var(--line-strong);
-  padding-top: 20px;
-}
-.steps .num {
-  font-family: var(--serif);
+.error-note {
+  padding: 12px;
+  background: #fcf0e8;
+  margin-bottom: 15px;
+  border-radius: 10px;
   font-size: 12px;
-  letter-spacing: 0.24em;
-  color: var(--gold);
+  color: #a3654b;
 }
-.steps h3 {
-  margin: 12px 0 10px;
-  font-size: 19px;
-  letter-spacing: 0.1em;
+.error-note button {
+  font-weight: 600;
+  margin-left: 12px;
 }
-.steps p {
-  font-size: 12.5px;
-  line-height: 2;
+.about-link {
+  font-size: 11px;
+}
+.about-copy {
+  display: grid;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.about-copy h3 {
+  color: var(--ink);
+}
+.about-copy a {
+  color: var(--green);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.domain {
+  font-size: 11px;
+  letter-spacing: 0.5px;
   color: var(--muted);
 }
-
-/* ——— 引语 ——— */
-.quote-band {
-  position: relative;
-  margin: clamp(56px, 8vw, 110px) clamp(12px, 2.2vw, 34px) 0;
-  height: clamp(280px, 34vw, 420px);
-  border-radius: 8px;
-  overflow: hidden;
-  isolation: isolate;
-}
-.quote-band img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: 60% 55%;
-  z-index: -2;
-}
-.quote-veil {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background:
-    linear-gradient(90deg, rgba(10, 34, 28, 0.82) 0%, rgba(10, 34, 28, 0.5) 45%, rgba(10, 34, 28, 0.2) 100%),
-    linear-gradient(0deg, rgba(10, 34, 28, 0.55), rgba(10, 34, 28, 0.05));
-}
-.quote {
-  position: absolute;
-  left: clamp(24px, 6%, 90px);
-  bottom: clamp(60px, 9%, 96px);
-  font-family: var(--serif);
-  font-size: clamp(22px, 2.6vw, 40px);
-  line-height: 1.9;
-  letter-spacing: 0.1em;
-  color: #f4f7ec;
-}
-.quote-src {
-  position: absolute;
-  left: clamp(24px, 6%, 90px);
-  bottom: clamp(28px, 4.5%, 46px);
-  font-size: 10.5px;
-  letter-spacing: 0.24em;
-  color: rgba(240, 245, 230, 0.6);
-}
-
-@media (max-width: 1100px) {
-  .steps {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (min-width: 1500px) {
+  .home-main {
+    padding-top: 26px;
   }
-  .create-inner {
-    grid-template-columns: 1fr;
-    gap: 34px;
+  .welcome {
+    min-height: 322px;
+  }
+  .welcome-copy {
+    padding-top: 40px;
+  }
+}
+@media (max-width: 1050px) {
+  .home-main {
+    padding: 12px 24px 0;
+  }
+  .welcome-row {
+    grid-template-columns: minmax(0, 1fr) 285px;
+    gap: 16px;
+  }
+  .welcome-copy {
+    padding: 30px 25px;
+  }
+  .welcome-art {
+    width: 62%;
+  }
+  .welcome-note {
+    font-size: 9px;
+  }
+  .room-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 @media (max-width: 760px) {
-  .hero {
-    height: auto;
-    min-height: calc(100svh - 96px);
+  .welcome-row {
+    grid-template-columns: 1fr;
   }
-  .hero-art {
-    object-position: 86% 22%;
+  .welcome {
+    min-height: 270px;
   }
-  .hero .eyebrow {
+  .welcome-art {
+    width: 62%;
+  }
+  .featured {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0 18px;
+    padding: 19px 23px;
+    border-radius: 18px;
+  }
+  .feature-head {
+    grid-column: 1/-1;
+  }
+  .featured h2 {
+    font-size: 20px;
+    margin-top: 12px;
+  }
+  .feature-desc {
+    grid-column: 1;
+  }
+  .feature-track {
+    grid-column: 1;
+    margin: 14px 0 0;
+  }
+  .feature-bottom {
+    grid-column: 2;
+    grid-row: 2/5;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: flex-end;
+    gap: 10px;
+  }
+  .feature-empty {
+    margin: 10px;
+  }
+  .room-tools {
+    gap: 8px;
+  }
+  .room-search input {
+    width: 130px;
+  }
+}
+@media (max-width: 500px) {
+  .home-main {
+    padding: 8px 18px 0;
+  }
+  .welcome {
+    min-height: 245px;
+    border-radius: 20px;
+  }
+  .welcome-copy {
+    padding: 25px 21px;
+  }
+  .welcome-note {
+    font-size: 8px;
+    max-width: 170px;
+  }
+  h1 {
+    font-size: 34px;
+    margin-top: 18px;
+  }
+  .welcome-copy p {
+    max-width: 132px;
+    font-size: 10px;
+  }
+  .welcome-link {
     font-size: 9px;
-    letter-spacing: 0.16em;
+    gap: 5px;
+    margin-top: 17px;
   }
-  .hero-shade {
-    background:
-      linear-gradient(180deg, rgba(9, 31, 26, 0.9) 0%, rgba(9, 31, 26, 0.72) 38%, rgba(9, 31, 26, 0.18) 62%, rgba(9, 31, 26, 0.72) 100%);
+  .welcome-art {
+    width: 66%;
+    object-position: 50% 50%;
+    mask-image: linear-gradient(90deg, transparent, #000 24%);
   }
-  .hero-copy {
-    padding: 42px 24px 150px;
-    max-width: none;
+  .spark-one {
+    left: 41%;
+    font-size: 17px;
   }
-  .hero h1 {
-    font-size: clamp(32px, 9vw, 42px);
-    line-height: 1.55;
-    margin: 20px 0 16px;
-  }
-  .hero-desc {
-    font-size: 12px;
-    line-height: 2;
-  }
-  .hero-actions {
-    margin-top: 26px;
-    gap: 18px;
-  }
-  .hero-vertical {
+  .spark-two {
     display: none;
   }
-  .hero-foot {
-    left: 24px;
-    right: 20px;
-    bottom: 20px;
-    font-size: 8.5px;
-    letter-spacing: 0.14em;
+  .art-credit {
+    font-size: 6px;
   }
-  .intro {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 22px;
-    padding: 26px 22px;
+  .rooms-section {
+    padding-top: 27px;
   }
-  .intro-text {
-    font-size: 15px;
+  .rooms-heading h2 {
+    font-size: 19px;
   }
-  .intro-stats {
+  .room-tools {
+    flex-wrap: wrap;
+    margin-top: 17px;
+  }
+  .filters button {
+    font-size: 11px;
+    padding: 6px 11px;
+  }
+  .room-search {
     width: 100%;
-    justify-content: space-between;
+    order: 2;
+  }
+  .room-search input {
+    width: 100%;
+  }
+  .room-grid {
+    grid-template-columns: 1fr;
     gap: 12px;
   }
-  .stat {
-    flex-direction: column;
-    gap: 4px;
+  .create-card {
+    min-height: 110px;
+    position: relative;
+    align-items: flex-start;
+    padding-left: 80px;
+    gap: 3px;
   }
-  .stat strong {
-    font-size: 26px;
+  .create-plus {
+    position: absolute;
+    left: 24px;
   }
-  .section {
-    padding: 40px 22px 0;
+  .feature-track {
+    gap: 9px;
   }
-  .section-head h2 {
-    font-size: 24px;
+  .feature-cover {
+    width: 44px;
+    height: 44px;
   }
-  .steps {
-    grid-template-columns: 1fr;
-    gap: 18px;
+  .featured {
+    padding: 17px 19px;
+    gap: 0 10px;
   }
-  .create-band {
-    padding: 40px 22px;
+  .feature-bottom .btn {
+    padding: 0 10px;
   }
-  .quote-band {
-    margin: 40px 10px 0;
-    border-radius: 5px;
+  .feature-track b {
+    font-size: 11px;
   }
-  .quote-band img {
-    object-position: 66% 50%;
+  .rooms-heading p {
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 500px) {
+  .welcome-copy p {
+    max-width: 118px;
+  }
+  .welcome-art {
+    width: 70%;
+    height: 90%;
+    right: -7%;
+    object-position: 50% 50%;
   }
 }
 </style>
