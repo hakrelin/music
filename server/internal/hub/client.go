@@ -166,6 +166,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	// 4) 通知其他人（新客户端已经拿到 snapshot，此时再发 presence 不会乱序）
 	room.broadcastPresence()
+	room.broadcastQueue()
 	h.log.Info("WS 已连接", "room", room.id, "session", c.session, "nick", c.nick, "remote", c.remote)
 
 	// 如果房间还没开始播放（比如刚启动的电台房），顺手催一下。

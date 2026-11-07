@@ -15,6 +15,7 @@ const ui = useUiStore();
 
 const role = ref<'root' | 'admin'>('root');
 const password = ref('');
+const ownerPassword = ref('');
 const volume = ref(room.mode.volume);
 
 watch(
@@ -23,6 +24,7 @@ watch(
     if (open) {
       volume.value = room.mode.volume;
       password.value = '';
+      ownerPassword.value = '';
     }
   },
 );
@@ -82,9 +84,36 @@ function toggle(key: 'loop' | 'random' | 'radio') {
           />
           <button class="btn btn-lime btn-sm" type="button" @click="auth">认证</button>
         </div>
+        <p class="tip">
+          房主可使用本房间管理密码认证；服务器房主 / 管理员口令可管理所有房间和电台。
+        </p>
         <p class="tip">认证只对这次连接有效；断线重连后需要重新认证。</p>
       </section>
 
+      <section v-if="room.isRoot" class="block">
+        <h3>本房间管理密码</h3>
+        <div class="auth-row">
+          <input
+            v-model="ownerPassword"
+            class="input"
+            type="password"
+            maxlength="64"
+            placeholder="新的房间管理密码"
+            autocomplete="new-password"
+          />
+          <button
+            class="btn btn-lime btn-sm"
+            :disabled="!ownerPassword"
+            @click="
+              room.setOwnerPassword(ownerPassword);
+              ownerPassword = '';
+            "
+          >
+            修改密码
+          </button>
+        </div>
+        <p class="tip">只影响当前普通房间；服务器口令和入房密码独立。</p>
+      </section>
       <!-- 播放模式 -->
       <section class="block">
         <h3>播放模式</h3>

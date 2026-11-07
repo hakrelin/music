@@ -315,3 +315,124 @@ test('网易云节点 403 时改连等价 CDN，保留签名路径且恢复播�
     'https://m701.music.126.net/20990101/signature/jdymusic/obj/test.mp3?token=preserved',
   );
 });
+
+test('点歌成功提示在弹窗上方，拒绝点歌只显示失败', async ({ page, request }) => {
+  const id = await create(request, '点歌反馈');
+  await joined(page, id);
+  await search(page);
+  await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
+  await expect(page.locator('.toast.ok')).toContainText('点歌成功');
+  await expect(page.locator('.toasts')).toHaveJSProperty('popover', 'manual');
+  expect(await page.locator('.toasts').evaluate((el) => el.matches(':popover-open'))).toBe(true);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '房间设置', exact: true }).click();
+  await page.getByPlaceholder('口令', { exact: true }).fill('test-room-owner');
+  await page.getByRole('button', { name: '认证', exact: true }).click();
+  await expect(page.getByRole('button', { name: '禁止点歌', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '禁止点歌', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await page.reload(); // a fresh listener session without global credentials
+  await search(page);
+  await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
+  await expect(page.locator('.toast.error')).toContainText('禁止点歌');
+  await expect(page.locator('.toast.ok')).toHaveCount(0);
+});
+
+test('按用户昵称找到公开歌单并逐首点歌', async ({ page, request }) => {
+  const id = await create(request, '用户歌单');
+  await joined(page, id);
+  await page.getByRole('button', { name: '添加歌曲', exact: true }).click();
+  await page.getByRole('button', { name: '导入歌单', exact: true }).click();
+  await page.getByRole('button', { name: '搜用户昵称', exact: true }).click();
+  await page.getByPlaceholder('网易云用户昵称').fill('演示');
+  await page.getByRole('button', { name: '搜索歌单', exact: true }).click();
+  await page.getByRole('button', { name: /演示听众/ }).click();
+  await page.locator('.playlists .pl').first().click();
+  const song = await page.locator('.tracks .t-name').nth(2).textContent();
+  await page
+    .locator('.tracks .track')
+    .nth(2)
+    .getByRole('button', { name: '点歌', exact: true })
+    .click();
+  await expect(page.locator('.toast.ok').last()).toContainText('点歌成功');
+  await expect(page.locator('.tracks .track').nth(2).getByRole('button')).toHaveText('已加入');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.song-info h1')).toHaveText(song);
+});
+
+test('创建者自动成为房主，修改管理密码后其他听众可认证', async ({ page, browser }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '创建房间', exact: true }).click();
+  await page.getByPlaceholder('例如：修图的时候听什么').fill('独立房主测试');
+  await page.getByRole('button', { name: '创建并进入', exact: true }).click();
+  await page.waitForURL('**/room/**');
+  await page.getByRole('button', { name: '房间设置', exact: true }).click();
+  await expect(page.getByRole('button', { name: '清空待播', exact: true })).toBeEnabled();
+  await page.getByPlaceholder('新的房间管理密码').fill('new-local-owner');
+  await page.getByRole('button', { name: '修改密码', exact: true }).click();
+  await expect(page.locator('.toast.ok').last()).toContainText('管理密码已修改');
+  const ctx = await browser.newContext();
+  const guest = await ctx.newPage();
+  await guest.goto(page.url());
+  await guest.getByRole('button', { name: '房间设置', exact: true }).click();
+  await expect(guest.getByRole('button', { name: '清空待播', exact: true })).toBeDisabled();
+  await guest.getByPlaceholder('口令', { exact: true }).fill('new-local-owner');
+  await guest.getByRole('button', { name: '认证', exact: true }).click();
+  await expect(guest.getByRole('button', { name: '清空待播', exact: true })).toBeEnabled();
+  await ctx.close();
+});
+
+test('听众可投票删除待播歌曲，当前歌曲保持播放', async ({ page, request }) => {
+  const id = await create(request, '投票删除');
+  await joined(page, id);
+  await search(page, '恋');
+  await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
+  await expect(page.locator('.toast.ok').last()).toContainText('点歌成功');
+  await page.getByPlaceholder('歌名 / 歌手 / 专辑').fill('竹');
+  await page.getByRole('button', { name: '搜索音乐', exact: true }).click();
+  await expect(page.locator('.t-name').first()).not.toHaveText('恋之瞳');
+  await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: '投票删除 0/1', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '投票删除 0/1', exact: true }).click();
+  await expect(page.locator('.queue-scroll li')).toHaveCount(1);
+  await expect(page.locator('.song-info h1')).toHaveText('恋之瞳');
+  await expect(page.locator('.toast.ok').last()).toContainText('投票通过');
+});
+
+test('无报错的播放停滞会自动重载，手动暂停不触发重载', async ({ page, request }) => {
+  const id = await create(request, '停滞恢复');
+  await observeAudio(page);
+  await joined(page, id);
+  await search(page);
+  await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await ensurePlaying(page);
+  await expect.poll(() => page.evaluate(() => window.__testAudio.currentTime)).toBeGreaterThan(0.2);
+  await page.clock.install();
+  await page.evaluate(() => {
+    window.__audioLoads = 0;
+    const a = window.__testAudio;
+    const load = a.load.bind(a);
+    a.load = () => {
+      window.__audioLoads++;
+      return load();
+    };
+    // Simulate a device/network stall without going through the user's pause action.
+    a.pause();
+    a.dispatchEvent(new Event('waiting'));
+  });
+  await page.clock.fastForward(14000);
+  await expect.poll(() => page.evaluate(() => window.__audioLoads)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => window.__testAudio.paused)).toBe(false);
+  await page.evaluate(() => {
+    document
+      .querySelector('#app')
+      .__vue_app__.config.globalProperties.$pinia._s.get('player')
+      .pause();
+    window.__audioLoads = 0;
+  });
+  await page.clock.fastForward(20000);
+  expect(await page.evaluate(() => window.__audioLoads)).toBe(0);
+  expect(await page.evaluate(() => window.__testAudio.paused)).toBe(true);
+});

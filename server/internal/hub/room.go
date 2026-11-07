@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	crand "crypto/rand"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -45,12 +46,14 @@ type Room struct {
 	banSwitch bool // 禁切歌/投票
 	volume    int
 
-	likes       map[string]int
-	votes       map[string]struct{}
-	blacklist   map[string]bool // 禁言：session id
-	messages    []model.ChatMsg
-	playlistIDs []string // 电台歌单源
-	lastTrackID string   // 上一首（补歌时避免立刻重复）
+	likes         map[string]int
+	removeVotes   map[string]map[string]struct{}
+	ownerPassword string
+	votes         map[string]struct{}
+	blacklist     map[string]bool // 禁言：session id
+	messages      []model.ChatMsg
+	playlistIDs   []string // 电台歌单源
+	lastTrackID   string   // 上一首（补歌时避免立刻重复）
 
 	refilling   bool
 	busy        bool      // 正在解析/切换（同一时刻只允许一个状态机动作）
@@ -62,15 +65,16 @@ type Room struct {
 
 func newRoom(h *Hub, id, name, desc string) *Room {
 	return &Room{
-		hub:       h,
-		id:        id,
-		name:      name,
-		desc:      desc,
-		clients:   make(map[*Client]struct{}),
-		likes:     make(map[string]int),
-		votes:     make(map[string]struct{}),
-		blacklist: make(map[string]bool),
-		volume:    80,
+		hub:         h,
+		id:          id,
+		name:        name,
+		desc:        desc,
+		clients:     make(map[*Client]struct{}),
+		likes:       make(map[string]int),
+		votes:       make(map[string]struct{}),
+		removeVotes: make(map[string]map[string]struct{}),
+		blacklist:   make(map[string]bool),
+		volume:      80,
 	}
 }
 
@@ -173,6 +177,11 @@ func (r *Room) leave(c *Client) {
 		return
 	}
 	delete(r.clients, c)
+	delete(r.votes, c.session)
+	for _, votes := range r.removeVotes {
+		delete(votes, c.session)
+	}
+	r.broadcastQueueLocked()
 	online := len(r.clients)
 	if online == 0 {
 		r.emptySince = r.hub.nowFn()
@@ -206,8 +215,7 @@ func (r *Room) statePayloadLocked() []byte {
 }
 
 func (r *Room) queuePayloadLocked() []byte {
-	q := make([]model.Track, len(r.queue))
-	copy(q, r.queue)
+	q := r.queueViewLocked()
 	return mustJSON(queueOut{T: "queue", Queue: q})
 }
 
@@ -311,8 +319,7 @@ func (r *Room) helloPayloadLocked(c *Client) []byte {
 }
 
 func (r *Room) snapshotPayloadLocked() []byte {
-	q := make([]model.Track, len(r.queue))
-	copy(q, r.queue)
+	q := r.queueViewLocked()
 	likes := make(map[string]int, len(r.likes))
 	for k, v := range r.likes {
 		likes[k] = v
@@ -356,7 +363,6 @@ func (r *Room) doStart() {
 			r.mu.Unlock()
 			return
 		}
-		version := r.version
 		cand := r.queue[0]
 		r.mu.Unlock()
 
@@ -367,7 +373,7 @@ func (r *Room) doStart() {
 		}
 
 		r.mu.Lock()
-		if r.closed || r.version != version || r.startedAt > 0 {
+		if r.closed || r.startedAt > 0 || len(r.queue) == 0 || r.queue[0].QueueID != cand.QueueID {
 			r.mu.Unlock()
 			return
 		}
@@ -583,6 +589,7 @@ func (r *Room) refillRadio() {
 		t.URL = ""
 		t.Nick = ""
 		t.Likes = 0
+		t.QueueID = crand.Text()
 		picked = append(picked, t)
 	}
 	if len(picked) == 0 {
@@ -607,6 +614,29 @@ func (r *Room) pick(c *Client, t model.Track) (string, string) {
 		return "bad_request", "曲目 ID 不能为空"
 	}
 
+	if t.Source == "" {
+		t.Source = r.hub.primary
+	}
+	// 时长兜底：搜索接口偶尔给不出 duration，点歌时按 ID 补一次，
+	// 否则队列显示 00:00、自动切歌也会按 300 秒误判。
+	if t.Duration <= 0 {
+		if p, ok := r.hub.reg.ForTrack(t); ok {
+			if dp, ok2 := p.(provider.DetailProvider); ok2 {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if meta, derr := dp.TrackDetail(ctx, t.ID); derr == nil && meta.Duration > 0 {
+					t.Duration = meta.Duration
+					if t.Artist == "" {
+						t.Artist = meta.Artist
+					}
+					if t.Cover == "" {
+						t.Cover = meta.Cover
+					}
+				}
+				cancel()
+			}
+		}
+	}
+
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -623,25 +653,10 @@ func (r *Room) pick(c *Client, t model.Track) (string, string) {
 	if t.Source == "" {
 		t.Source = r.hub.primary
 	}
+	t.QueueID = crand.Text()
 	t.Nick = c.nick
 	t.Likes = 0
 	t.URL = ""
-	// 时长兜底：搜索接口偶尔给不出 duration，点歌时按 ID 补一次，
-	// 否则队列显示 00:00、自动切歌也会按 300 秒误判。
-	if t.Duration <= 0 {
-		if p, ok := r.hub.reg.ForTrack(t); ok {
-			if dp, ok2 := p.(provider.DetailProvider); ok2 {
-				if ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second); true {
-					if meta, derr := dp.TrackDetail(ctx, t.ID); derr == nil && meta.Duration > 0 {
-						t.Duration = meta.Duration
-						if t.Artist == "" { t.Artist = meta.Artist }
-						if t.Cover == "" { t.Cover = meta.Cover }
-					}
-					cancel()
-				}
-			}
-		}
-	}
 	r.queue = append(r.queue, t)
 	r.version++
 	r.broadcastQueueLocked()
@@ -649,7 +664,7 @@ func (r *Room) pick(c *Client, t model.Track) (string, string) {
 	r.mu.Unlock()
 
 	if needStart {
-		r.start()
+		go r.start()
 	}
 	return "", ""
 }
@@ -1033,4 +1048,86 @@ func (r *Room) next(c *Client) (string, string) {
 	}
 	r.advance("manual")
 	return "", ""
+}
+
+// queueViewLocked decorates only pending entries and discards obsolete ballots.
+func (r *Room) queueViewLocked() []model.Track {
+	q := append([]model.Track{}, r.queue...)
+	live := map[string]bool{}
+	need := max(1, int(math.Ceil(r.hub.voteRatio*float64(len(r.clients)))))
+	for i := range q {
+		if i == 0 {
+			continue
+		}
+		live[q[i].QueueID] = true
+		q[i].RemoveVotes = len(r.removeVotes[q[i].QueueID])
+		q[i].RemoveNeed = need
+	}
+	for id := range r.removeVotes {
+		if !live[id] {
+			delete(r.removeVotes, id)
+		}
+	}
+	return q
+}
+
+func (r *Room) voteRemove(c *Client, entry string) (string, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return "room_not_found", "房间不存在"
+	}
+	if _, ok := r.clients[c]; !ok {
+		return "forbidden", "请先进入房间"
+	}
+	if r.banSwitch && !c.isAdmin() {
+		return "forbidden", "房间已禁止切歌及投票删除"
+	}
+	idx := -1
+	for i, t := range r.queue {
+		if t.QueueID == entry && entry != "" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return "not_found", "队列里没有这首"
+	}
+	if idx == 0 {
+		return "bad_request", "当前歌曲请使用投票切歌"
+	}
+	votes := r.removeVotes[entry]
+	if votes == nil {
+		votes = map[string]struct{}{}
+		r.removeVotes[entry] = votes
+	}
+	if _, ok := votes[c.session]; ok {
+		return "already_voted", "你已经投过票了"
+	}
+	votes[c.session] = struct{}{}
+	need := max(1, int(math.Ceil(r.hub.voteRatio*float64(len(r.clients)))))
+	message := fmt.Sprintf("投票删除「%s」 %d/%d", r.queue[idx].Name, len(votes), need)
+	if len(votes) >= need {
+		message = "投票通过，已删除「" + r.queue[idx].Name + "」"
+		r.queue = append(r.queue[:idx], r.queue[idx+1:]...)
+		r.version++
+		delete(r.removeVotes, entry)
+	}
+	r.broadcastQueueLocked()
+	r.pushNoticeLocked(message, "info")
+	return "", message
+}
+
+func (r *Room) OwnerPassword() string { r.mu.Lock(); defer r.mu.Unlock(); return r.ownerPassword }
+func (r *Room) setOwnerPassword(c *Client, password string) (string, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.builtin || c.role != "root" {
+		return "forbidden", "只有房主可以修改普通房间的管理密码"
+	}
+	if n := utf8.RuneCountInString(password); n < 1 || n > 64 {
+		return "bad_request", "管理密码需为 1–64 字"
+	}
+	r.ownerPassword = password
+	return "", "房间管理密码已修改"
 }

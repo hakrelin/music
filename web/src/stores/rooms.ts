@@ -62,6 +62,7 @@ export const useRoomsStore = defineStore('rooms', {
         return id;
       }
       const res = await http.createRoom(body);
+      sessionStorage.setItem(`music.owner.${res.id}`, res.ownerPassword);
       await this.loadRooms();
       return res.id;
     },

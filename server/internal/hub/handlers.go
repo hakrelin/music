@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hakrelin/music/server/internal/model"
+	"github.com/hakrelin/music/server/internal/provider"
 )
 
 // handle 分发客户端消息（docs §4.1）。未知类型回 error 而不是断开，
@@ -45,11 +46,22 @@ func (c *Client) handle(m *inMsg) {
 	case "playlist.get":
 		c.handlePlaylistGet(m)
 
+	case "user.search":
+		c.handleUserSearch(m)
+
 	case "user.playlists":
 		c.handleUserPlaylists(m)
 
 	case "queue.remove":
 		code, msg := c.room.removeTrack(c, m.ID)
+		c.reply(code, msg, m.Req)
+
+	case "queue.remove.vote":
+		code, msg := c.room.voteRemove(c, m.ID)
+		c.reply(code, msg, m.Req)
+
+	case "room.password":
+		code, msg := c.room.setOwnerPassword(c, m.Password)
 		c.reply(code, msg, m.Req)
 
 	case "queue.top":
@@ -117,6 +129,9 @@ func (c *Client) handle(m *inMsg) {
 // reply 统一处理 (code, message) 形式的房间操作结果。
 func (c *Client) reply(code, msg, req string) {
 	if code == "" {
+		if req != "" {
+			c.sendJSON(map[string]any{"t": "ok", "req": req, "message": msg})
+		}
 		return
 	}
 	c.sendErrorCode(code, msg, req)
@@ -141,12 +156,16 @@ func (c *Client) handleAuth(m *inMsg) {
 		c.sendErrorCode("bad_request", "未知角色", m.Req)
 		return
 	}
-	// 配置里没设口令时一律拒绝：绝不允许"空口令"直接拿到管理权限。
-	if want == "" || m.Password != want {
+	c.room.mu.Lock()
+	defer c.room.mu.Unlock()
+	localOwner := role == "root" && c.room.ownerPassword != "" && m.Password == c.room.ownerPassword
+	// 本房间管理密码与服务器口令均可认证，空口令始终拒绝。
+	if !localOwner && (want == "" || m.Password != want) {
 		c.sendErrorCode("bad_password", "口令不对", m.Req)
 		return
 	}
 	c.role = role
+	c.room.broadcastLocked(c.room.presencePayloadLocked())
 	c.sendJSON(authOut{
 		T:       "auth",
 		Role:    role,
@@ -290,4 +309,30 @@ func writeHTTPError(w http.ResponseWriter, status int, code, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]string{"code": code, "message": message},
 	})
+}
+
+func (c *Client) handleUserSearch(m *inMsg) {
+	source, ok := c.sourceOf(m.Source)
+	if !ok {
+		c.sendErrorCode("bad_source", "未知音乐源", m.Req)
+		return
+	}
+	p, _ := c.hub.reg.For(source)
+	ps, ok := p.(provider.UserSearcher)
+	if !ok {
+		c.sendErrorCode("unsupported", "该音乐源暂不支持用户搜索", m.Req)
+		return
+	}
+	page, size := c.paging(m)
+	ctx, cancel := context.WithTimeout(context.Background(), providerTimeout)
+	defer cancel()
+	users, total, err := ps.SearchUsers(ctx, m.Q, page, size)
+	if err != nil {
+		c.sendErrorCode("provider_error", "用户搜索失败："+err.Error(), m.Req)
+		return
+	}
+	if users == nil {
+		users = []model.User{}
+	}
+	c.sendJSON(map[string]any{"t": "user.search", "req": m.Req, "users": users, "total": total})
 }

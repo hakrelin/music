@@ -118,14 +118,19 @@ func (h *Hub) fillLyric(ctx context.Context, t *model.Track) {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, providerTimeout)
 	defer cancel()
-	lrc, err := p.Lyric(callCtx, t.ID)
+	var lrc string
+	var err error
 	if lp, ok := p.(provider.LyricProvider); ok {
 		if full, ferr := lp.LyricFull(callCtx, t.ID); ferr == nil {
 			lrc, err = full.Lrc, nil
 			if strings.TrimSpace(full.Trans) != "" {
 				t.LyricTrans = full.Trans
 			}
+		} else {
+			err = ferr
 		}
+	} else {
+		lrc, err = p.Lyric(callCtx, t.ID)
 	}
 	if err != nil || strings.TrimSpace(lrc) == "" {
 		return

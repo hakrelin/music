@@ -1,6 +1,9 @@
 /** 与 docs/architecture.md §2 一致的共享类型。 */
 
 export interface Track {
+  queueId?: string;
+  removeVotes?: number;
+  removeNeed?: number;
   id: string;
   source: string;
   name: string;
@@ -16,6 +19,12 @@ export interface Track {
   lyric?: string;
   /** 与 lyric 同时间轴的翻译（可能没有）。 */
   lyricTrans?: string;
+}
+
+export interface MusicUser {
+  id: string;
+  nick: string;
+  avatar: string;
 }
 
 export interface Member {

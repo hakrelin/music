@@ -190,10 +190,11 @@ func (s *Server) handleRooms(w http.ResponseWriter, _ *http.Request) {
 }
 
 type createRoomReq struct {
-	Name     string `json:"name"`
-	Desc     string `json:"desc"`
-	NeedPwd  bool   `json:"needPwd"`
-	Password string `json:"password"`
+	OwnerPassword string `json:"ownerPassword"`
+	Name          string `json:"name"`
+	Desc          string `json:"desc"`
+	NeedPwd       bool   `json:"needPwd"`
+	Password      string `json:"password"`
 }
 
 func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +203,7 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "请求体不是合法 JSON")
 		return
 	}
-	room, err := s.hub.CreateRoom(req.Name, req.Desc, req.NeedPwd, req.Password)
+	room, err := s.hub.CreateRoom(req.Name, req.Desc, req.NeedPwd, req.Password, req.OwnerPassword)
 	if err != nil {
 		var ve *hub.ValidationError
 		if asValidation(err, &ve) {
@@ -212,7 +213,7 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "创建房间失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"id": room.ID()})
+	writeJSON(w, http.StatusOK, map[string]string{"id": room.ID(), "ownerPassword": room.OwnerPassword()})
 }
 
 func (s *Server) handleRoomAuth(w http.ResponseWriter, r *http.Request) {

@@ -17,7 +17,13 @@ const createOpen = ref(false);
 const aboutOpen = ref(false);
 const filter = ref('all');
 const query = ref('');
-const form = reactive({ name: '', desc: '', needPwd: false, password: '' });
+const form = reactive({
+  name: '',
+  desc: '',
+  needPwd: false,
+  password: '',
+  ownerPassword: '',
+});
 const featured = computed(
   () => rooms.rooms.find((r) => r.builtin && r.radio) || rooms.radioRooms[0],
 );
@@ -52,6 +58,7 @@ async function createRoom() {
     const id = await rooms.createRoom({
       name: form.name.trim(),
       desc: form.desc.trim(),
+      ownerPassword: form.ownerPassword,
       needPwd: form.needPwd,
       password: form.needPwd ? form.password.trim() : undefined,
     });
@@ -133,7 +140,10 @@ async function createRoom() {
             <h2>
               听歌大厅 <span>{{ rooms.rooms.length }}</span>
             </h2>
-            <p><i class="online-dot" />{{ rooms.totalOnline }} 人正在分享同一段旋律</p>
+            <p>
+              <i class="online-dot" />{{ rooms.totalOnline }}
+              人正在分享同一段旋律
+            </p>
           </div>
           <button
             class="refresh"
@@ -216,6 +226,17 @@ async function createRoom() {
             autocomplete="new-password"
             required
         /></label>
+        <label class="field"
+          ><span>房间管理密码 <small>选填，留空自动生成</small></span>
+          <input
+            v-model="form.ownerPassword"
+            class="input"
+            type="password"
+            maxlength="64"
+            autocomplete="new-password"
+          />
+        </label>
+        <p>创建者自动获得房主权限，可在设置中修改管理密码。</p>
         <p>创建后直接进入。普通房间空置 10 分钟后自动关闭。</p>
         <button class="btn btn-primary" :disabled="creating">
           {{ creating ? '正在创建…' : '创建并进入' }}<Icon name="arrow" :size="16" />

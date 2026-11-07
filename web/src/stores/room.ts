@@ -7,6 +7,7 @@ import { useUiStore } from '@/stores/ui';
 import type {
   ChatMsg,
   Member,
+  MusicUser,
   Playlist,
   PlaylistSearchResult,
   Role,
@@ -132,6 +133,8 @@ export const useRoomStore = defineStore('room', {
           this.room = msg.room as typeof this.room;
           this.clockOffset = Number(msg.now || Date.now()) - Date.now();
           this.joined = true;
+          const ownerPassword = sessionStorage.getItem(`music.owner.${this.roomId}`);
+          if (ownerPassword) void this.auth('root', ownerPassword);
           break;
         }
         case 'state': {
@@ -228,12 +231,22 @@ export const useRoomStore = defineStore('room', {
       const text = content.trim();
       if (!text) return;
       if (this.mock) {
-        this.pushChat({ type: 'chat', nick: this.nick, content: text, ts: Date.now() });
+        this.pushChat({
+          type: 'chat',
+          nick: this.nick,
+          content: text,
+          ts: Date.now(),
+        });
         return;
       }
       this.socket?.send({ t: 'chat', content: text });
     },
-    pick(track: Pick<Track, 'id' | 'source' | 'name' | 'artist' | 'album' | 'cover' | 'duration' | 'fee'>) {
+    async pick(
+      track: Pick<
+        Track,
+        'id' | 'source' | 'name' | 'artist' | 'album' | 'cover' | 'duration' | 'fee'
+      >,
+    ) {
       if (this.mock) {
         this.queue.push({
           ...track,
@@ -247,7 +260,8 @@ export const useRoomStore = defineStore('room', {
         });
         return;
       }
-      this.socket?.send({ t: 'pick', id: track.id, source: track.source || '', name: track.name });
+      if (!this.socket) throw new Error('尚未连接');
+      await this.socket.request({ ...track, t: 'pick' });
     },
     voteSkip() {
       if (this.mock) return;
@@ -258,14 +272,25 @@ export const useRoomStore = defineStore('room', {
         return { tracks: mockTracks.slice(0, 6), total: 6 };
       }
       const r = await this.socket!.request({ t: 'search', q, page, size });
-      return { tracks: (r.tracks as Track[]) || [], total: Number(r.total || 0) };
+      return {
+        tracks: (r.tracks as Track[]) || [],
+        total: Number(r.total || 0),
+      };
     },
     async searchPlaylists(q: string, page = 1, size = 10): Promise<PlaylistSearchResult> {
       if (this.mock) {
         return { playlists: mockPlaylists, total: mockPlaylists.length };
       }
-      const r = await this.socket!.request({ t: 'playlist.search', q, page, size });
-      return { playlists: (r.playlists as Playlist[]) || [], total: Number(r.total || 0) };
+      const r = await this.socket!.request({
+        t: 'playlist.search',
+        q,
+        page,
+        size,
+      });
+      return {
+        playlists: (r.playlists as Playlist[]) || [],
+        total: Number(r.total || 0),
+      };
     },
     async getPlaylist(id: string): Promise<{ playlist: Playlist; tracks: Track[] }> {
       if (this.mock) {
@@ -277,7 +302,25 @@ export const useRoomStore = defineStore('room', {
         tracks: (r.tracks as Track[]) || [],
       };
     },
+    async searchUsers(q: string, page = 1): Promise<{ users: MusicUser[]; total: number }> {
+      if (this.mock)
+        return {
+          users: [{ id: 'demo-user', nick: '演示听众', avatar: '' }],
+          total: 1,
+        };
+      const r = await this.socket!.request({
+        t: 'user.search',
+        q,
+        page,
+        size: 10,
+      });
+      return {
+        users: (r.users as MusicUser[]) || [],
+        total: Number(r.total || 0),
+      };
+    },
     async userPlaylists(uid: string): Promise<Playlist[]> {
+      if (this.mock) return mockPlaylists;
       const r = await this.socket!.request({ t: 'user.playlists', uid }, 15000);
       return (r.playlists as Playlist[]) || [];
     },
@@ -288,6 +331,25 @@ export const useRoomStore = defineStore('room', {
         return;
       }
       this.socket?.send({ t: 'auth', role, password });
+    },
+    async voteRemove(id: string) {
+      try {
+        if (!this.socket) throw new Error('尚未连接');
+        const r = await this.socket.request({ t: 'queue.remove.vote', id });
+        useUiStore().ok(String(r.message || '投票已提交'));
+      } catch (e) {
+        useUiStore().error(e instanceof Error ? e.message : '投票失败');
+      }
+    },
+    async setOwnerPassword(password: string) {
+      try {
+        if (!this.socket) throw new Error('尚未连接');
+        await this.socket.request({ t: 'room.password', password });
+        sessionStorage.setItem(`music.owner.${this.roomId}`, password);
+        useUiStore().ok('房间管理密码已修改');
+      } catch (e) {
+        useUiStore().error(e instanceof Error ? e.message : '修改失败');
+      }
     },
     queueRemove(id: string) {
       this.socket?.send({ t: 'queue.remove', id });
@@ -337,8 +399,18 @@ export const useRoomStore = defineStore('room', {
       this.joined = true;
       this.online = info.online;
       this.chat = mockChat.slice();
-      this.mode = { ...defaultMode(), loop: true, random: true, radio: info.radio };
-      const first: Track = { ...mockTracks[0], nick: '游客1024', lyric: mockLyric, url: '' };
+      this.mode = {
+        ...defaultMode(),
+        loop: true,
+        random: true,
+        radio: info.radio,
+      };
+      const first: Track = {
+        ...mockTracks[0],
+        nick: '游客1024',
+        lyric: mockLyric,
+        url: '',
+      };
       this.queue = [first, ...mockTracks.slice(1).map((t) => ({ ...t }))];
       this.startedAt = Date.now() - 61000;
       this.clockOffset = 0;

@@ -23,13 +23,20 @@ async function parse(res: Response): Promise<unknown> {
   }
   if (!res.ok) {
     const err = (data as { error?: { code?: string; message?: string } } | null)?.error;
-    throw new ApiError(err?.message || `请求失败（HTTP ${res.status}）`, err?.code || 'http_error', res.status);
+    throw new ApiError(
+      err?.message || `请求失败（HTTP ${res.status}）`,
+      err?.code || 'http_error',
+      res.status,
+    );
   }
   return data;
 }
 
 export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, { headers: { Accept: 'application/json' }, ...init });
+  const res = await fetch(`/api${path}`, {
+    headers: { Accept: 'application/json' },
+    ...init,
+  });
   return (await parse(res)) as T;
 }
 
@@ -37,7 +44,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(body ?? {})
+    body: JSON.stringify(body ?? {}),
   });
   return (await parse(res)) as T;
 }
@@ -54,13 +61,17 @@ export interface CreateRoomBody {
   desc: string;
   needPwd: boolean;
   password?: string;
+  ownerPassword?: string;
 }
 
 export const http = {
   health: () => apiGet<HealthInfo>('/healthz'),
   config: () => apiGet<import('@/types').SiteConfig>('/config'),
   rooms: () => apiGet<{ rooms: import('@/types').RoomSummary[] }>('/rooms'),
-  createRoom: (body: CreateRoomBody) => apiPost<{ id: string }>('/rooms', body),
+  createRoom: (body: CreateRoomBody) =>
+    apiPost<{ id: string; ownerPassword: string }>('/rooms', body),
   authRoom: (id: string, password: string) =>
-    apiPost<{ ok: boolean }>(`/rooms/${encodeURIComponent(id)}/auth`, { password })
+    apiPost<{ ok: boolean }>(`/rooms/${encodeURIComponent(id)}/auth`, {
+      password,
+    }),
 };

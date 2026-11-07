@@ -8,6 +8,9 @@ audio.preload = 'auto';
 const STORE_VOLUME = 'yue.volume';
 let retryTimer = 0;
 let loadVersion = 0;
+let lastProgressAt = Date.now();
+let lastProgressTime = 0;
+let wantsPlayback = false;
 
 export const usePlayerStore = defineStore('player', {
   state: () => ({
@@ -44,6 +47,10 @@ export const usePlayerStore = defineStore('player', {
       audio.muted = this.muted;
       audio.addEventListener('timeupdate', () => {
         this.time = audio.currentTime;
+        if (Math.abs(audio.currentTime - lastProgressTime) > 0.05) {
+          lastProgressAt = Date.now();
+          lastProgressTime = audio.currentTime;
+        }
       });
       audio.addEventListener('loadedmetadata', () => {
         this.duration = Number.isFinite(audio.duration) ? audio.duration : 0;
@@ -57,26 +64,19 @@ export const usePlayerStore = defineStore('player', {
         this.playing = false;
       });
       audio.addEventListener('error', () => {
-        if (!audio.getAttribute('src')) return;
-        this.loading = false;
-        this.blocked = false;
-        window.clearTimeout(retryTimer);
-        if (this._retries >= 2) {
-          this.failed = true;
-          return;
-        }
-        this._retries += 1;
-        const version = loadVersion;
-        retryTimer = window.setTimeout(() => {
-          retryTimer = 0;
-          if (version !== loadVersion || !audio.getAttribute('src')) return;
-          this.loading = true;
-          const fallback = fallbackMediaUrl(audio.src);
-          if (fallback) audio.src = fallback;
-          audio.load();
-          void this.play();
-        }, 600 * this._retries);
+        if (wantsPlayback) this.recover();
       });
+      window.setInterval(() => {
+        if (
+          !wantsPlayback ||
+          this.blocked ||
+          this.failed ||
+          audio.ended ||
+          !audio.getAttribute('src')
+        )
+          return;
+        if (Date.now() - lastProgressAt > 12000) this.recover();
+      }, 1000);
       audio.addEventListener('waiting', () => {
         this.loading = true;
       });
@@ -90,11 +90,36 @@ export const usePlayerStore = defineStore('player', {
       });
       this.ready = audio.readyState >= 1;
     },
+    recover() {
+      if (retryTimer || !audio.getAttribute('src')) return;
+      this.blocked = false;
+      if (this._retries >= 2) {
+        this.failed = true;
+        this.loading = false;
+        return;
+      }
+      this._retries++;
+      const version = loadVersion;
+      retryTimer = window.setTimeout(() => {
+        retryTimer = 0;
+        if (version !== loadVersion || !wantsPlayback) return;
+        const fallback = fallbackMediaUrl(audio.src);
+        if (fallback) audio.src = fallback;
+        lastProgressAt = Date.now();
+        lastProgressTime = 0;
+        this.loading = true;
+        audio.load();
+        void this.play();
+      }, 600 * this._retries);
+    },
     load(track: Track | null, startedAt: number, offset: number, autoPlay = true) {
       this.init();
       window.clearTimeout(retryTimer);
       retryTimer = 0;
       loadVersion += 1;
+      wantsPlayback = autoPlay;
+      lastProgressAt = Date.now();
+      lastProgressTime = 0;
       this.startedAt = startedAt;
       this.offset = offset;
       this._retries = 0;
@@ -102,6 +127,7 @@ export const usePlayerStore = defineStore('player', {
       this.time = 0;
       this.duration = track?.duration || 0;
       if (!track || !track.url) {
+        wantsPlayback = false;
         audio.pause();
         audio.removeAttribute('src');
         audio.load();
@@ -123,6 +149,8 @@ export const usePlayerStore = defineStore('player', {
       if (autoPlay) void this.play();
     },
     async play(): Promise<void> {
+      if (!wantsPlayback) lastProgressAt = Date.now();
+      wantsPlayback = true;
       this.init();
       if (!audio.getAttribute('src')) return;
       const version = loadVersion;
@@ -136,13 +164,15 @@ export const usePlayerStore = defineStore('player', {
         if (name === 'NotAllowedError') {
           this.blocked = true;
           this.loading = false;
-        } else if (!retryTimer && this._retries >= 2) {
-          this.failed = true;
-          this.loading = false;
+        } else {
+          this.recover();
         }
       }
     },
     retry() {
+      wantsPlayback = true;
+      lastProgressAt = Date.now();
+      lastProgressTime = 0;
       window.clearTimeout(retryTimer);
       retryTimer = 0;
       loadVersion += 1;
@@ -152,6 +182,7 @@ export const usePlayerStore = defineStore('player', {
       void this.play();
     },
     pause() {
+      wantsPlayback = false;
       window.clearTimeout(retryTimer);
       retryTimer = 0;
       audio.pause();
@@ -191,8 +222,16 @@ export const usePlayerStore = defineStore('player', {
       if (!force && audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
       const target = Math.min(this.targetTime(), audio.duration - 0.5);
       if (target < 0) return;
+      if (!force) {
+        // Slow connections should keep playing downloaded audio instead of seeking into another request.
+        let buffered = false;
+        for (let i = 0; i < audio.buffered.length; i++) {
+          if (audio.buffered.start(i) <= target && target < audio.buffered.end(i)) buffered = true;
+        }
+        if (!buffered) return;
+      }
       // 只向前纠偏：目标落后于当前位置时不回拉，避免换歌瞬间 seek 触发二次缓冲。
-      if (target - audio.currentTime > 1.5) {
+      if (force || target - audio.currentTime > 1.5) {
         try {
           audio.currentTime = target;
         } catch {

@@ -4,7 +4,7 @@ import Icon from '@/components/Icon.vue';
 import { useRoomStore } from '@/stores/room';
 import { useRoomsStore } from '@/stores/rooms';
 import { useUiStore } from '@/stores/ui';
-import type { Playlist, Track } from '@/types';
+import type { Playlist, Track, MusicUser } from '@/types';
 
 const room = useRoomStore();
 const rooms = useRoomsStore();
@@ -21,6 +21,7 @@ const total = ref(0);
 const page = ref(1);
 const pageSize = 8;
 const searched = ref(false);
+const pending = ref(new Set<string>());
 
 async function doSearch(reset = true) {
   if (searching.value) return;
@@ -48,15 +49,60 @@ function turnPage(delta: number) {
   void doSearch(false);
 }
 
-function pick(track: Track) {
-  room.pick({ id: track.id, source: track.source, name: track.name, artist: track.artist, album: track.album, cover: track.cover, duration: track.duration, fee: track.fee });
-  ui.ok(`已点歌：${track.name}`);
+async function pick(track: Track) {
+  if (pending.value.has(track.id)) return;
+  pending.value.add(track.id);
+  try {
+    await room.pick({
+      id: track.id,
+      source: track.source,
+      name: track.name,
+      artist: track.artist,
+      album: track.album,
+      cover: track.cover,
+      duration: track.duration,
+      fee: track.fee,
+    });
+    ui.ok(`点歌成功：${track.name}`);
+  } catch (e) {
+    ui.error(e instanceof Error ? e.message : '点歌失败');
+  } finally {
+    pending.value.delete(track.id);
+  }
 }
 
 /* ——— 导入歌单 ——— */
 const plKeyword = ref('');
-const plMode = ref<'search' | 'id'>('search');
+const plMode = ref<'search' | 'id' | 'user'>('search');
 const plLoading = ref(false);
+const users = ref<MusicUser[]>([]);
+const userPage = ref(1);
+const userTotal = ref(0);
+const selectedUser = ref<MusicUser | null>(null);
+async function openUser(u: MusicUser) {
+  plLoading.value = true;
+  selectedUser.value = u;
+  try {
+    plList.value = await room.userPlaylists(u.id);
+  } catch (e) {
+    ui.error(e instanceof Error ? e.message : '用户歌单加载失败');
+  } finally {
+    plLoading.value = false;
+  }
+}
+function changeMode(mode: 'search' | 'id' | 'user') {
+  plMode.value = mode;
+  users.value = [];
+  plList.value = [];
+  current.value = null;
+  selectedUser.value = null;
+  plSearched.value = false;
+  userPage.value = 1;
+}
+async function userTurn(delta: number) {
+  userPage.value += delta;
+  await searchPlaylists(false);
+}
 const plList = ref<Playlist[]>([]);
 const plSearched = ref(false);
 const current = ref<Playlist | null>(null);
@@ -64,14 +110,25 @@ const currentTracks = ref<Track[]>([]);
 const loadingTracks = ref(false);
 const picked = ref<Set<string>>(new Set());
 
-async function searchPlaylists() {
+async function searchPlaylists(reset = true) {
+  if (plLoading.value) return;
   const q = plKeyword.value.trim();
-  if (!q) return ui.warn('输入歌单关键词或歌单 ID');
+  if (!q) return ui.warn('输入歌单关键词、ID 或用户昵称');
+  if (reset) userPage.value = 1;
+  users.value = [];
+  plList.value = [];
+  selectedUser.value = null;
+  plSearched.value = false;
   plLoading.value = true;
   current.value = null;
   currentTracks.value = [];
   try {
-    if (plMode.value === 'id') {
+    if (plMode.value === 'user') {
+      const res = await room.searchUsers(q, userPage.value);
+      users.value = res.users;
+      userTotal.value = res.total;
+      plSearched.value = true;
+    } else if (plMode.value === 'id') {
       const one = await room.getPlaylist(q);
       current.value = one.playlist;
       currentTracks.value = one.tracks;
@@ -102,21 +159,38 @@ async function openPlaylist(p: Playlist) {
   }
 }
 
-function pickAll() {
+const batchPicking = ref(false);
+async function pickAll() {
+  if (batchPicking.value) return;
   const rest = currentTracks.value.filter((t) => !picked.value.has(t.id)).slice(0, 20);
   if (!rest.length) return ui.warn('没有可以加入的曲目');
-  rest.forEach((t) => {
-    room.pick({ id: t.id, source: t.source, name: t.name, artist: t.artist, album: t.album, cover: t.cover, duration: t.duration, fee: t.fee });
-    picked.value.add(t.id);
-  });
-  ui.ok(`已加入 ${rest.length} 首（单次最多 20 首）`);
+  batchPicking.value = true;
+  let count = 0;
+  try {
+    for (const t of rest) {
+      await room.pick(t);
+      picked.value.add(t.id);
+      count++;
+    }
+    ui.ok(`已加入 ${count} 首`);
+  } catch (e) {
+    ui.error(`已加入 ${count} 首；${e instanceof Error ? e.message : '点歌失败'}`);
+  } finally {
+    batchPicking.value = false;
+  }
 }
-
-function pickOne(t: Track) {
-  if (picked.value.has(t.id)) return;
-  room.pick({ id: t.id, source: t.source, name: t.name, artist: t.artist, album: t.album, cover: t.cover, duration: t.duration, fee: t.fee });
-  picked.value.add(t.id);
-  ui.ok(`已点歌：${t.name}`);
+async function pickOne(t: Track) {
+  if (picked.value.has(t.id) || pending.value.has(t.id)) return;
+  pending.value.add(t.id);
+  try {
+    await room.pick(t);
+    picked.value.add(t.id);
+    ui.ok(`点歌成功：${t.name}`);
+  } catch (e) {
+    ui.error(e instanceof Error ? e.message : '点歌失败');
+  } finally {
+    pending.value.delete(t.id);
+  }
 }
 
 /* ——— 东方电台 ——— */
@@ -177,7 +251,9 @@ function loadRadio(id: string) {
             >
           </div>
           <span v-if="t.fee > 0" class="tag gold tiny">VIP</span>
-          <button class="add" type="button" @click="pick(t)">点歌</button>
+          <button class="add" type="button" :disabled="pending.has(t.id)" @click="pick(t)">
+            点歌
+          </button>
         </li>
       </ul>
 
@@ -193,14 +269,35 @@ function loadRadio(id: string) {
     <!-- 导入歌单 -->
     <div v-show="tab === 'playlist'" class="pane">
       <div class="mode-switch">
-        <button :class="{ on: plMode === 'search' }" @click="plMode = 'search'">搜歌单</button>
-        <button :class="{ on: plMode === 'id' }" @click="plMode = 'id'">按 ID / 链接</button>
+        <button
+          :class="{ on: plMode === 'search' }"
+          @click="changeMode('search')"
+          :disabled="plLoading"
+        >
+          搜歌单
+        </button>
+        <button
+          :class="{ on: plMode === 'user' }"
+          @click="changeMode('user')"
+          :disabled="plLoading"
+        >
+          搜用户昵称
+        </button>
+        <button :class="{ on: plMode === 'id' }" @click="changeMode('id')" :disabled="plLoading">
+          按 ID / 链接
+        </button>
       </div>
       <div class="row">
         <input
           v-model="plKeyword"
           class="input night"
-          :placeholder="plMode === 'search' ? '歌单关键词，例如：东方原曲' : '歌单 ID 或 分享链接'"
+          :placeholder="
+            plMode === 'user'
+              ? '网易云用户昵称'
+              : plMode === 'search'
+                ? '歌单关键词，例如：东方原曲'
+                : '歌单 ID 或 分享链接'
+          "
           @keydown.enter="searchPlaylists()"
         />
         <button
@@ -216,6 +313,48 @@ function loadRadio(id: string) {
 
       <p v-if="plLoading" class="state">正在打开歌单…</p>
 
+      <template v-if="plMode === 'user' && !current && !plLoading">
+        <template v-if="!selectedUser">
+          <ul class="playlists">
+            <li v-for="u in users" :key="u.id">
+              <button class="pl" @click="openUser(u)">
+                <img v-if="u.avatar" :src="u.avatar" alt="" /><span class="pl-main"
+                  ><b>{{ u.nick }}</b
+                  ><small class="pl-sub">用户 ID：{{ u.id }}</small></span
+                >
+              </button>
+            </li>
+          </ul>
+          <div v-if="userTotal > 10" class="pager">
+            <button :disabled="userPage <= 1" @click="userTurn(-1)">上一页</button
+            ><span>{{ userPage }}</span
+            ><button :disabled="userPage * 10 >= userTotal" @click="userTurn(1)">下一页</button>
+          </div>
+        </template>
+        <p v-else class="tip">
+          <button
+            @click="
+              selectedUser = null;
+              plList = [];
+            "
+          >
+            ← 返回用户
+          </button>
+          · {{ selectedUser.nick }} 的公开歌单
+        </p>
+      </template>
+      <p
+        v-if="
+          !plLoading &&
+          !current &&
+          plSearched &&
+          !plList.length &&
+          (plMode !== 'user' || selectedUser || !users.length)
+        "
+        class="state"
+      >
+        没有找到公开结果，换个关键词试试。
+      </p>
       <!-- 歌单列表 -->
       <ul v-if="!current && plList.length" class="playlists">
         <li v-for="p in plList" :key="p.id" class="pl" @click="openPlaylist(p)">
@@ -236,7 +375,14 @@ function loadRadio(id: string) {
             <b>{{ current.name }}</b>
             <small>{{ current.creator }} · 共 {{ current.count }} 首，这里显示前 60 首</small>
           </div>
-          <button class="add-all" type="button" @click="pickAll">前 20 首加入队列</button>
+          <button
+            class="add-all"
+            type="button"
+            :disabled="batchPicking || loadingTracks"
+            @click="pickAll"
+          >
+            前 20 首加入队列
+          </button>
         </div>
         <p v-if="loadingTracks" class="state">正在取曲目…</p>
         <ul v-else class="tracks">
@@ -245,7 +391,12 @@ function loadRadio(id: string) {
               <span class="t-name">{{ t.name }}</span>
               <span class="t-sub">{{ t.artist }}</span>
             </div>
-            <button class="add" type="button" :disabled="picked.has(t.id)" @click="pickOne(t)">
+            <button
+              class="add"
+              type="button"
+              :disabled="picked.has(t.id) || pending.has(t.id) || batchPicking"
+              @click="pickOne(t)"
+            >
               {{ picked.has(t.id) ? '已加入' : '点歌' }}
             </button>
           </li>

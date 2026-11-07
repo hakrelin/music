@@ -12,6 +12,7 @@ package hub
 
 import (
 	"context"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -250,6 +251,7 @@ func (h *Hub) tick() {
 			r.mu.Unlock()
 			continue
 		}
+		needStart := len(r.queue) > 0 && r.startedAt == 0 && !r.busy
 		due := false
 		if len(r.queue) > 0 && r.startedAt > 0 {
 			durMs := int64(trackDuration(r.queue[0])) * 1000
@@ -263,6 +265,8 @@ func (h *Hub) tick() {
 			// 放到 goroutine 里：解析 URL 可能耗到超时（8s），不能让一个房间
 			// 的慢解析拖住其它房间的切歌/补歌巡检。
 			go r.advance("auto")
+		} else if needStart {
+			go r.start()
 		} else if needRefill {
 			go r.refillRadio()
 		}
@@ -358,7 +362,7 @@ func (e *ValidationError) Error() string { return e.Message }
 var errHubClosed = errors.New("服务正在关闭")
 
 // CreateRoom 创建普通房间（radio=false）。
-func (h *Hub) CreateRoom(name, desc string, needPwd bool, password string) (*Room, error) {
+func (h *Hub) CreateRoom(name, desc string, needPwd bool, password string, ownerPasswords ...string) (*Room, error) {
 	name = strings.TrimSpace(name)
 	desc = strings.TrimSpace(desc)
 	if n := utf8.RuneCountInString(name); n < 1 || n > 33 {
@@ -372,6 +376,13 @@ func (h *Hub) CreateRoom(name, desc string, needPwd bool, password string) (*Roo
 		return nil, &ValidationError{Message: "房间密码需为 1–32 字"}
 	}
 
+	ownerPassword := crand.Text()
+	if len(ownerPasswords) > 0 && ownerPasswords[0] != "" {
+		ownerPassword = ownerPasswords[0]
+	}
+	if utf8.RuneCountInString(ownerPassword) > 64 {
+		return nil, &ValidationError{Message: "管理密码不能超过 64 字"}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
@@ -389,6 +400,7 @@ func (h *Hub) CreateRoom(name, desc string, needPwd bool, password string) (*Roo
 		return nil, errors.New("房间 ID 生成失败")
 	}
 	r := newRoom(h, id, name, desc)
+	r.ownerPassword = ownerPassword
 	r.needPwd = needPwd
 	r.password = password
 	// 从创建那一刻起就计入空置：开完房没人进，也要能被回收。

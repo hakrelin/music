@@ -58,6 +58,7 @@ type Provider struct {
 	cfg     Config
 	client  *http.Client
 	csrf    string // 从 cookie 里提取的 __csrf，部分 weapi 接口要求与 cookie 一致
+	probe   func(context.Context, string) bool
 	baseURL string // weapi 入口，默认 weapiBaseURL；单测可替换成 httptest 地址
 }
 
@@ -74,6 +75,7 @@ func New(cfg Config) *Provider {
 		client:  &http.Client{Timeout: timeout},
 		csrf:    csrfFromCookie(cfg.Cookie),
 		baseURL: weapiBaseURL,
+		probe:   probeAudio,
 	}
 }
 
@@ -426,7 +428,7 @@ func (p *Provider) resolveURL(ctx context.Context, songID int64) (string, int, e
 			if fallbackURL == "" {
 				fallbackURL, fallbackBr = url, gotBr
 			}
-			if probeAudio(ctx, url) {
+			if p.probe(ctx, url) {
 				return url, gotBr, nil
 			}
 			lastErr = fmt.Errorf("br=%d 的 CDN 地址探测失败（%s）", br, cdnHost(url))
@@ -872,4 +874,31 @@ func (p *Provider) TrackDetail(ctx context.Context, id string) (model.Track, err
 	}
 	t.Source = sourceName
 	return t, nil
+}
+func (p *Provider) SearchUsers(ctx context.Context, q string, page, size int) ([]model.User, int, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return nil, 0, errors.New("用户昵称不能为空")
+	}
+	page = max(1, page)
+	size = min(30, max(1, size))
+	var resp struct {
+		Result struct {
+			Users []struct {
+				ID     int64  `json:"userId"`
+				Nick   string `json:"nickname"`
+				Avatar string `json:"avatarUrl"`
+			} `json:"userprofiles"`
+			Total int `json:"userprofileCount"`
+		} `json:"result"`
+	}
+	err := p.weapi(ctx, "search/get", map[string]any{"s": q, "type": 1002, "offset": (page - 1) * size, "limit": size, "total": true}, &resp)
+	if err != nil {
+		return nil, 0, err
+	}
+	users := make([]model.User, 0, len(resp.Result.Users))
+	for _, u := range resp.Result.Users {
+		users = append(users, model.User{ID: fmt.Sprint(u.ID), Nick: u.Nick, Avatar: u.Avatar})
+	}
+	return users, resp.Result.Total, nil
 }

@@ -1,10 +1,20 @@
 <script setup lang="ts">
+import { ref, watch, nextTick } from 'vue';
 import { useUiStore } from '@/stores/ui';
 const ui = useUiStore();
+const host = ref<HTMLElement>();
+watch(
+  () => ui.toasts.map((t) => t.id).join(','),
+  async () => {
+    await nextTick();
+    host.value?.hidePopover();
+    if (ui.toasts.length) host.value?.showPopover();
+  },
+);
 </script>
 <template>
   <Teleport to="body"
-    ><div class="toasts" aria-live="polite">
+    ><div ref="host" popover="manual" class="toasts" aria-live="polite">
       <TransitionGroup name="toast"
         ><div v-for="t in ui.toasts" :key="t.id" class="toast" :class="t.kind">
           {{ t.text }}
@@ -16,6 +26,12 @@ const ui = useUiStore();
 <style scoped>
 .toasts {
   position: fixed;
+  inset: auto 24px 125px auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
   right: 24px;
   bottom: 125px;
   z-index: 100;

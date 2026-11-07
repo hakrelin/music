@@ -2,17 +2,20 @@ package model
 
 // Track 是队列项，也是搜索结果项。URL 只在服务端解析后填充。
 type Track struct {
-	ID       string `json:"id"`
-	Source   string `json:"source"`
-	Name     string `json:"name"`
-	Artist   string `json:"artist"`
-	Album    string `json:"album"`
-	Cover    string `json:"cover"`
-	Duration int    `json:"duration"` // 秒
-	Fee      int    `json:"fee"`      // 0 免费 / 1 VIP / 4 付费 / 8 低音质可播
-	URL      string `json:"url"`
-	Nick     string `json:"nick,omitempty"`  // 点歌人
-	Likes    int    `json:"likes,omitempty"` // 点赞数
+	QueueID     string `json:"queueId,omitempty"`
+	RemoveVotes int    `json:"removeVotes,omitempty"`
+	RemoveNeed  int    `json:"removeNeed,omitempty"`
+	ID          string `json:"id"`
+	Source      string `json:"source"`
+	Name        string `json:"name"`
+	Artist      string `json:"artist"`
+	Album       string `json:"album"`
+	Cover       string `json:"cover"`
+	Duration    int    `json:"duration"` // 秒
+	Fee         int    `json:"fee"`      // 0 免费 / 1 VIP / 4 付费 / 8 低音质可播
+	URL         string `json:"url"`
+	Nick        string `json:"nick,omitempty"`  // 点歌人
+	Likes       int    `json:"likes,omitempty"` // 点赞数
 	// Lyric 只在「当前播放」的曲目上填充（快照/current 消息），队列里的其它曲目为空。
 	Lyric string `json:"lyric,omitempty"`
 	// LyricTrans 是歌词翻译（与 Lyric 同一套时间轴，可能为空）。
@@ -55,4 +58,10 @@ type RoomSummary struct {
 	Online  int         `json:"online"`
 	Builtin bool        `json:"builtin"`
 	Now     *NowPlaying `json:"now,omitempty"`
+}
+
+type User struct {
+	ID     string `json:"id"`
+	Nick   string `json:"nick"`
+	Avatar string `json:"avatar"`
 }

@@ -74,3 +74,8 @@ func (r *Registry) Names() []string {
 	}
 	return out
 }
+
+// UserSearcher is optional: nickname search returns distinct accounts to choose from.
+type UserSearcher interface {
+	SearchUsers(context.Context, string, int, int) ([]model.User, int, error)
+}

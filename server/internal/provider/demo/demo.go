@@ -264,3 +264,13 @@ func (p *Provider) TrackIDs() []string {
 	sort.Strings(ids)
 	return ids
 }
+
+func (p *Provider) SearchUsers(ctx context.Context, q string, page, size int) ([]model.User, int, error) {
+	if strings.TrimSpace(q) == "" {
+		return []model.User{}, 0, nil
+	}
+	if page > 1 {
+		return []model.User{}, 1, nil
+	}
+	return []model.User{{ID: "demo-user", Nick: "演示听众"}}, 1, nil
+}

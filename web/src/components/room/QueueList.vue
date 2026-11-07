@@ -9,14 +9,16 @@ defineEmits<{ search: [] }>();
   <section class="queue-panel" aria-label="点歌队列">
     <header>
       <h2 class="panel-title">
-        <Icon name="list" :size="17" />待播队列 <span>{{ room.upcoming.length }}</span>
+        <Icon name="list" :size="17" />待播队列
+        <span>{{ room.upcoming.length }}</span>
       </h2>
       <button class="icon-btn" aria-label="添加歌曲" @click="$emit('search')">
         <Icon name="plus" :size="17" />
       </button>
     </header>
     <button class="add-music" @click="$emit('search')">
-      <Icon name="search" :size="15" />搜索音乐 / 导入歌单 <Icon name="plus" :size="13" />
+      <Icon name="search" :size="15" />搜索音乐 / 导入歌单
+      <Icon name="plus" :size="13" />
     </button>
     <div class="queue-scroll" tabindex="0" aria-label="歌曲列表">
       <p v-if="!room.queue.length" class="empty">队列空空的，来点第一首吧。</p>
@@ -41,6 +43,14 @@ defineEmits<{ search: [] }>();
                 <Icon name="close" :size="13" />
               </button>
             </div>
+            <button
+              v-if="i > 0 && t.queueId"
+              class="vote-remove"
+              :disabled="room.mode.banSwitch && !room.isAdmin"
+              @click="room.voteRemove(t.queueId)"
+            >
+              投票删除 {{ t.removeVotes || 0 }}/{{ t.removeNeed || 1 }}
+            </button>
             <span v-else-if="i === 0" class="now-label">当前</span>
           </div>
         </li>
@@ -169,6 +179,11 @@ header {
 .now-label {
   font-size: 10px;
   color: #547046;
+}
+.vote-remove {
+  font-size: 11px;
+  color: var(--green);
+  padding: 4px;
 }
 .track-actions {
   display: flex;
