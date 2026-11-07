@@ -422,14 +422,17 @@ test('无报错的播放停滞会自动重载，手动暂停不触发重载', as
       window.__audioLoads++;
       return load();
     };
-    // Simulate a device/network stall without going through the user's pause action.
-    a.pause();
+    // Freeze observed progress without treating an OS audio-focus pause as a network failure.
+    const time = a.currentTime;
+    Object.defineProperty(a, 'currentTime', { configurable: true, get: () => time });
+    document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player').checkProgress();
     a.dispatchEvent(new Event('waiting'));
   });
   await page.clock.fastForward(14000);
   await expect.poll(() => page.evaluate(() => window.__audioLoads)).toBeGreaterThan(0);
   await expect.poll(() => page.evaluate(() => window.__testAudio.paused)).toBe(false);
   await page.evaluate(() => {
+    delete window.__testAudio.currentTime;
     document
       .querySelector('#app')
       .__vue_app__.config.globalProperties.$pinia._s.get('player')
@@ -552,4 +555,125 @@ test('下一首的非预设 CDN 失败时提前重新取址', async ({page,reque
   });
   await expect.poll(()=>page.evaluate(()=>window.__testAudio===window.__freshMedia&&!window.__testAudio.paused)).toBe(true);
   expect(await page.evaluate(()=>window.__testAudio.src)).toContain('/api/demo/audio/d01.wav');
+});
+
+async function mockSystemMedia(page) {
+  await page.addInitScript(() => {
+    window.__systemActions = {};
+    window.__systemPositions = [];
+    Object.defineProperty(navigator, 'mediaSession', {configurable:true,value:{
+      metadata:null, playbackState:'none',
+      setActionHandler(action, handler) { window.__systemActions[action] = handler; },
+      setPositionState(state) { window.__systemPositions.push(state || null); },
+    }});
+    Object.defineProperty(navigator, 'audioSession', {configurable:true,value:{type:'auto'}});
+  });
+}
+async function simulateVisibility(page, hidden) {
+  await page.evaluate(hidden => {
+    window.__background = hidden;
+    Object.defineProperty(document, 'hidden', {configurable:true,get:()=>window.__background});
+    Object.defineProperty(document, 'visibilityState', {configurable:true,get:()=>window.__background?'hidden':'visible'});
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+}
+
+test('系统媒体会话显示歌曲，支持暂停、继续和投票切歌，离房清理', async ({page,request}) => {
+  await mockSystemMedia(page);await observeAudio(page);
+  const id=await create(request,'系统媒体会话');await joined(page,id);await search(page,'恋');
+  await page.locator('.track').first().getByRole('button',{name:'点歌',exact:true}).click();
+  await page.getByPlaceholder('歌名 / 歌手 / 专辑').fill('竹');
+  await page.getByRole('button',{name:'搜索音乐',exact:true}).click();
+  await expect(page.locator('.t-name').first()).not.toHaveText('恋之瞳');
+  const nextName=await page.locator('.t-name').first().textContent();
+  await page.locator('.track').first().getByRole('button',{name:'点歌',exact:true}).click();
+  await page.keyboard.press('Escape');await ensurePlaying(page);
+  await expect.poll(()=>page.evaluate(()=>navigator.mediaSession.metadata?.title)).toBe('恋之瞳');
+  await expect.poll(()=>page.evaluate(()=>navigator.mediaSession.playbackState)).toBe('playing');
+  expect(await page.evaluate(()=>navigator.audioSession.type)).toBe('playback');
+  expect(await page.evaluate(()=>window.__systemActions.seekto)).toBeNull();
+  await page.evaluate(()=>window.__systemActions.pause());
+  expect(await page.evaluate(()=>window.__testAudio.paused)).toBe(true);
+  expect(await page.evaluate(()=>navigator.mediaSession.playbackState)).toBe('paused');
+  await page.evaluate(()=>window.__systemActions.play());
+  await expect.poll(()=>page.evaluate(()=>window.__testAudio.paused)).toBe(false);
+  await page.evaluate(()=>window.__systemActions.nexttrack());
+  await expect(page.locator('.song-info h1')).toHaveText(nextName);
+  await expect.poll(()=>page.evaluate(()=>navigator.mediaSession.metadata?.title)).toBe(nextName);
+  await page.getByRole('link',{name:'返回听歌大厅',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>navigator.mediaSession.playbackState)).toBe('none');
+  expect(await page.evaluate(()=>navigator.mediaSession.metadata)).toBeNull();
+  expect(await page.evaluate(()=>window.__systemActions.play)).toBeNull();
+});
+
+test('后台定时器延迟不会重载音频，后台换歌保持原播放元素', async ({page,request}) => {
+  await observeAudio(page);const id=await create(request,'后台连续播放');
+  await joined(page,id);await search(page,'恋');
+  await page.locator('.track').first().getByRole('button',{name:'点歌',exact:true}).click();
+  await page.getByPlaceholder('歌名 / 歌手 / 专辑').fill('竹');
+  await page.getByRole('button',{name:'搜索音乐',exact:true}).click();
+  await expect(page.locator('.t-name').first()).not.toHaveText('恋之瞳');
+  const nextName=await page.locator('.t-name').first().textContent();
+  await page.locator('.track').first().getByRole('button',{name:'点歌',exact:true}).click();
+  await page.keyboard.press('Escape');await ensurePlaying(page);
+  await page.evaluate(()=>{
+    window.__backgroundMedia=window.__testAudio;window.__backgroundLoads=0;
+    const load=window.__testAudio.load.bind(window.__testAudio);
+    window.__testAudio.load=()=>{window.__backgroundLoads++;load()};
+  });
+  await simulateVisibility(page,true);
+  await page.clock.install();await page.clock.fastForward(15000);
+  expect(await page.evaluate(()=>window.__backgroundLoads)).toBe(0);
+  expect(await page.evaluate(()=>window.__testAudio.paused)).toBe(false);
+  await page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('room').voteSkip());
+  await expect(page.locator('.song-info h1')).toHaveText(nextName);
+  await expect.poll(()=>page.evaluate(()=>window.__testAudio.paused)).toBe(false);
+  expect(await page.evaluate(()=>window.__testAudio===window.__backgroundMedia)).toBe(true);
+  await simulateVisibility(page,false);
+  expect(await page.evaluate(()=>window.__testAudio===window.__backgroundMedia)).toBe(true);
+});
+
+test('系统暂停后切歌和恢复前台都不会擅自播放', async ({page,request}) => {
+  await observeAudio(page);const id=await create(request,'系统中断');
+  await joined(page,id);await search(page,'恋');
+  await page.locator('.track').first().getByRole('button',{name:'点歌',exact:true}).click();
+  await page.getByPlaceholder('歌名 / 歌手 / 专辑').fill('竹');
+  await page.getByRole('button',{name:'搜索音乐',exact:true}).click();
+  await expect(page.locator('.t-name').first()).not.toHaveText('恋之瞳');
+  const nextName=await page.locator('.t-name').first().textContent();
+  await page.locator('.track').first().getByRole('button',{name:'点歌',exact:true}).click();
+  await page.keyboard.press('Escape');await ensurePlaying(page);
+  await expect.poll(()=>page.evaluate(()=>window.__testAudio.readyState)).toBeGreaterThanOrEqual(3);
+  await page.evaluate(()=>window.__testAudio.pause());
+  await expect(page.getByText('播放被系统中断，点击继续收听。')).toBeVisible();
+  await page.evaluate(()=>window.__testAudio.play());
+  await expect(page.getByText('播放被系统中断，点击继续收听。')).toHaveCount(0);
+  await page.evaluate(()=>window.__testAudio.pause());
+  await expect(page.getByText('播放被系统中断，点击继续收听。')).toBeVisible();
+  await simulateVisibility(page,true);await simulateVisibility(page,false);
+  await page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('room').voteSkip());
+  await expect(page.locator('.song-info h1')).toHaveText(nextName);
+  expect(await page.evaluate(()=>window.__testAudio.paused)).toBe(true);
+  await page.getByRole('button',{name:'继续收听',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.__testAudio.paused)).toBe(false);
+});
+
+test('前台恢复会重连假活连接，保持音频和房间时间轴', async ({page,request}) => {
+  let connections=0;let poison=false;
+  await page.routeWebSocket(/\/api\/ws\?/,ws=>{
+    const number=++connections;const server=ws.connectToServer();
+    ws.onMessage(message=>{if(!(poison&&number===1))server.send(message)});
+    server.onMessage(message=>{if(!(poison&&number===1))ws.send(message)});
+  });
+  await observeAudio(page);const id=await create(request,'后台连接恢复');
+  await joined(page,id);await search(page);
+  await page.locator('.track').first().getByRole('button',{name:'点歌',exact:true}).click();
+  await page.keyboard.press('Escape');await ensurePlaying(page);
+  const started=await page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('room').startedAt);
+  await page.evaluate(()=>{window.__originalMedia=window.__testAudio});
+  await simulateVisibility(page,true);poison=true;await simulateVisibility(page,false);
+  await expect.poll(()=>connections,{timeout:8000}).toBeGreaterThan(1);
+  await expect.poll(()=>page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('room').connected)).toBe(true);
+  expect(await page.evaluate(()=>window.__testAudio===window.__originalMedia)).toBe(true);
+  expect(await page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('room').startedAt)).toBe(started);
 });

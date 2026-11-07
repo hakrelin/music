@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { markRaw } from 'vue';
 import type { Track } from '@/types';
+import { configureAudioSession, setMediaActions, updateMediaSession } from '@/utils/mediaSession';
 import {
   fallbackMediaUrl,
   preferredMediaUrl,
@@ -17,6 +18,9 @@ let recovering = false;
 let lastProgressAt = Date.now();
 let lastProgressTime = 0;
 let wantsPlayback = false;
+let userPaused = false;
+let nextTrack: (() => void) | null = null;
+let lastSystemUpdate = 0;
 type RefreshMedia = (track: Track, failedUrl: string, lower: boolean) => Promise<Track>;
 let refreshMedia: RefreshMedia | null = null;
 let sourceURL = '';
@@ -57,6 +61,7 @@ export const usePlayerStore = defineStore('player', {
       return Number.isFinite(raw) && raw >= 0 ? Math.min(1, raw) : 0.7;
     })(),
     muted: false,
+    interrupted: false,
     blocked: false,
     failed: false,
     trackId: '',
@@ -72,6 +77,63 @@ export const usePlayerStore = defineStore('player', {
     setRefreshHandler(handler: RefreshMedia | null) {
       refreshMedia = handler;
     },
+    configureSession() {
+      setMediaActions({
+        play: () => {
+          this.seekToTarget(true);
+          void this.play();
+        },
+        pause: () => this.pause(),
+        stop: () => this.pause(),
+        ...(nextTrack ? { nexttrack: () => nextTrack?.() } : {}),
+      });
+    },
+    beginSession(onNext: () => void) {
+      userPaused = false;
+      nextTrack = onNext;
+      this.interrupted = false;
+      this.configureSession();
+    },
+    endSession() {
+      this.load(null, 0, 0, false);
+      nextTrack = null;
+      setMediaActions({});
+      updateMediaSession(null, false, 0, 0);
+      configureAudioSession(false);
+    },
+    updateSystemState() {
+      updateMediaSession(
+        this.track,
+        this.playing && !audio.paused,
+        audio.currentTime,
+        this.duration,
+      );
+    },
+    resumePage() {
+      // A delayed JS callback does not mean that native background audio stalled.
+      lastProgressAt = Date.now();
+      lastProgressTime = audio.currentTime;
+      if (wantsPlayback && !userPaused && !audio.paused && !this.interrupted) this.seekToTarget();
+      this.updateSystemState();
+    },
+    checkProgress() {
+      const now = Date.now();
+      if (Math.abs(audio.currentTime - lastProgressTime) > 0.05) {
+        lastProgressAt = now;
+        lastProgressTime = audio.currentTime;
+      }
+      if (document.hidden || this.interrupted || userPaused) return;
+      if (
+        wantsPlayback &&
+        !this.blocked &&
+        !this.failed &&
+        !audio.ended &&
+        audio.getAttribute('src') &&
+        now - lastProgressAt >
+          (audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ? 5000 : 12000)
+      )
+        this.recover();
+    },
     bindMedia(el: HTMLAudioElement) {
       const on = (name: string, handler: () => void) =>
         el.addEventListener(name, () => {
@@ -83,17 +145,31 @@ export const usePlayerStore = defineStore('player', {
           lastProgressAt = Date.now();
           lastProgressTime = el.currentTime;
         }
+        if (Date.now() - lastSystemUpdate > 1000) {
+          lastSystemUpdate = Date.now();
+          this.updateSystemState();
+        }
       });
       on('loadedmetadata', () => {
         this.duration = Number.isFinite(el.duration) ? el.duration : 0;
         this.seekToTarget(true);
+        this.updateSystemState();
       });
       on('play', () => {
+        if (!this.track || !el.getAttribute('src')) return;
+        userPaused = false;
+        wantsPlayback = true;
+        this.interrupted = false;
         this.playing = true;
         this.blocked = false;
       });
       on('pause', () => {
+        if (wantsPlayback && !userPaused && !this.loading && !el.ended && !el.error) {
+          this.pause();
+          this.interrupted = true;
+        }
         this.playing = false;
+        this.updateSystemState();
       });
       on('error', () => {
         if (wantsPlayback) this.recover();
@@ -104,6 +180,8 @@ export const usePlayerStore = defineStore('player', {
       on('playing', () => {
         this.loading = false;
         this.failed = false;
+        this.interrupted = false;
+        this.updateSystemState();
       });
       on('canplay', () => {
         this.ready = true;
@@ -117,18 +195,12 @@ export const usePlayerStore = defineStore('player', {
       this.bindMedia(audio);
       audio.volume = this.volume;
       audio.muted = this.muted;
-      window.setInterval(() => {
-        if (
-          wantsPlayback &&
-          !this.blocked &&
-          !this.failed &&
-          !audio.ended &&
-          audio.getAttribute('src') &&
-          Date.now() - lastProgressAt >
-            (audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ? 5000 : 12000)
-        )
-          this.recover();
-      }, 1000);
+      this.configureSession();
+      window.setInterval(() => this.checkProgress(), 1000);
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) this.resumePage();
+      });
+      window.addEventListener('pageshow', () => this.resumePage());
     },
     prepareNext(track: Track | null) {
       this.init();
@@ -186,7 +258,15 @@ export const usePlayerStore = defineStore('player', {
       }, 3500);
     },
     recover() {
-      if (retryTimer || recovering || !wantsPlayback || !audio.getAttribute('src')) return;
+      if (
+        retryTimer ||
+        recovering ||
+        !wantsPlayback ||
+        userPaused ||
+        this.interrupted ||
+        !audio.getAttribute('src')
+      )
+        return;
       if (this._retries >= 2) {
         this.failed = true;
         this.loading = false;
@@ -238,7 +318,9 @@ export const usePlayerStore = defineStore('player', {
       retryTimer = 0;
       recovering = false;
       loadVersion++;
+      autoPlay = autoPlay && !userPaused;
       wantsPlayback = autoPlay;
+      if (autoPlay) this.interrupted = false;
       lastProgressAt = Date.now();
       lastProgressTime = 0;
       this.startedAt = startedAt;
@@ -264,7 +346,8 @@ export const usePlayerStore = defineStore('player', {
       if (
         sameEntry(prepared?.track || null, track) &&
         prepared?.track.url === track.url &&
-        !prepared.media.error
+        !prepared.media.error &&
+        !document.hidden
       ) {
         const old = audio;
         const next = prepared!;
@@ -283,21 +366,35 @@ export const usePlayerStore = defineStore('player', {
         this.duration = Number.isFinite(audio.duration) ? audio.duration : track.duration;
         this.seekToTarget(true);
       } else {
+        let playbackURL = preferredMediaUrl(track.url);
+        if (
+          sameEntry(prepared?.track || null, track) &&
+          prepared?.track.url === track.url &&
+          !prepared.media.error
+        ) {
+          playbackURL = prepared.media.getAttribute('src') || playbackURL;
+          sourceURL = prepared.resolvedURL;
+        }
         if (sameEntry(prepared?.track || null, track)) clearPrepared();
         this.ready = false;
         this.loading = true;
-        if (audio.getAttribute('src') === track.url) this.seekToTarget(true);
+        if (audio.getAttribute('src') === playbackURL) this.seekToTarget(true);
         else {
-          audio.src = preferredMediaUrl(track.url);
+          audio.src = playbackURL;
           audio.load();
         }
       }
+      this.updateSystemState();
       if (autoPlay) void this.play();
     },
     async play(): Promise<void> {
       this.init();
       if (!wantsPlayback) lastProgressAt = Date.now();
       wantsPlayback = true;
+      userPaused = false;
+      this.interrupted = false;
+      configureAudioSession(true);
+      this.configureSession();
       if (!audio.getAttribute('src')) return;
       const version = loadVersion;
       try {
@@ -321,15 +418,19 @@ export const usePlayerStore = defineStore('player', {
       this._retries = 0;
       this.failed = false;
       wantsPlayback = true;
+      userPaused = false;
+      this.interrupted = false;
       this.recover();
     },
     pause() {
+      userPaused = true;
       wantsPlayback = false;
       loadVersion++;
       recovering = false;
       window.clearTimeout(retryTimer);
       retryTimer = 0;
       audio.pause();
+      this.updateSystemState();
     },
     toggle() {
       if (this.playing) this.pause();

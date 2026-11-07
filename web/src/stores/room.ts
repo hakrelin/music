@@ -92,6 +92,9 @@ export const useRoomStore = defineStore('room', {
       usePlayerStore().setRefreshHandler((track, failedUrl, lower) =>
         this.refreshMedia(track, failedUrl, lower),
       );
+      usePlayerStore().beginSession(() => {
+        if (this.joined && !this.mode.banSwitch) this.voteSkip();
+      });
       this.roomId = roomId;
       this.pwd = pwd;
       this.fatal = '';
@@ -101,11 +104,15 @@ export const useRoomStore = defineStore('room', {
       }
       const socket = new RoomSocket({
         url: wsUrl(roomId),
-        onOpen: () => this.sendHello(),
-        onStatus: (connected) => {
-          this.connected = connected;
+        onOpen: () => {
+          if (this.socket === socket) this.sendHello();
         },
-        onEvent: (msg) => this.handleEvent(msg),
+        onStatus: (connected) => {
+          if (this.socket === socket) this.connected = connected;
+        },
+        onEvent: (msg) => {
+          if (this.socket === socket) this.handleEvent(msg);
+        },
       });
       this.socket = markRaw(socket);
       socket.connect();
@@ -114,6 +121,7 @@ export const useRoomStore = defineStore('room', {
       this.socket?.send({ t: 'hello', nick: this.nick, pwd: this.pwd });
     },
     leave() {
+      usePlayerStore().endSession();
       usePlayerStore().prepareNext(null);
       usePlayerStore().setRefreshHandler(null);
       this.socket?.close();

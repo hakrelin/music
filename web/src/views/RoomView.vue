@@ -57,7 +57,8 @@ onMounted(() => {
   player.init();
   void rooms.loadConfig();
   timer = window.setInterval(() => {
-    if (room.joined && room.current && player.playing) player.sync(room.clockOffset);
+    if (!document.hidden && room.joined && room.current && player.playing)
+      player.sync(room.clockOffset);
   }, 5000);
   window.addEventListener('keydown', key);
 });
@@ -119,6 +120,10 @@ watch(
       <div v-if="player.blocked" class="play-notice">
         <span><Icon name="volume" :size="15" />浏览器需要你点击一次，才能开始播放。</span
         ><button @click="player.play()">开始收听 <Icon name="play" :size="12" /></button>
+      </div>
+      <div v-else-if="player.interrupted" class="play-notice">
+        <span>播放被系统中断，点击继续收听。</span
+        ><button @click="player.toggle()">继续收听</button>
       </div>
       <div v-else-if="player.failed" class="play-notice failed" role="alert">
         <span>这首歌暂时无法播放，可以重试或投票切歌。</span

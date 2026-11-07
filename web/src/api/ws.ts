@@ -23,6 +23,10 @@ export class RoomSocket {
   private seq = 0;
   private heartbeat = 0;
   private reconnectTimer = 0;
+  private probeTimer = 0;
+  private resumePage = () => {
+    if (!document.hidden) this.resume();
+  };
   private attempt = 0;
   private closedByUser = false;
   /** 估算的服务器时钟偏移：serverNow - Date.now() */
@@ -32,20 +36,49 @@ export class RoomSocket {
 
   connect(): void {
     this.closedByUser = false;
+    document.addEventListener('visibilitychange', this.resumePage);
+    window.addEventListener('pageshow', this.resumePage);
     this.open();
+  }
+
+  /** Background suspension can leave an apparently OPEN, but dead, connection. */
+  resume(): void {
+    if (this.closedByUser) return;
+    window.clearTimeout(this.reconnectTimer);
+    window.clearTimeout(this.probeTimer);
+    const ws = this.ws;
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+      this.open();
+      return;
+    }
+    if (ws.readyState !== WebSocket.OPEN) return;
+    this.send({ t: 'ping' });
+    this.probeTimer = window.setTimeout(() => {
+      if (this.ws !== ws || this.closedByUser) return;
+      this.stopHeartbeat();
+      this.failPending(new Error('连接正在恢复'));
+      this.opts.onStatus?.(false);
+      ws.close();
+      this.open();
+    }, 3000);
   }
 
   private open(): void {
     const ws = new WebSocket(this.opts.url);
     this.ws = ws;
     ws.onopen = () => {
+      if (this.ws !== ws || this.closedByUser) return;
       this.attempt = 0;
       this.opts.onStatus?.(true);
       this.opts.onOpen?.();
       this.startHeartbeat();
     };
-    ws.onmessage = (ev) => this.handle(ev);
+    ws.onmessage = (ev) => {
+      if (this.ws === ws && !this.closedByUser) this.handle(ev);
+    };
     ws.onclose = () => {
+      if (this.ws !== ws || this.closedByUser) return;
+      window.clearTimeout(this.probeTimer);
       this.stopHeartbeat();
       this.opts.onStatus?.(false);
       this.failPending(new Error('连接已断开'));
@@ -87,6 +120,7 @@ export class RoomSocket {
     } catch {
       return;
     }
+    window.clearTimeout(this.probeTimer);
     if (msg.t === 'pong' && typeof msg.now === 'number') {
       this.offset = msg.now - Date.now();
       return;
@@ -123,7 +157,7 @@ export class RoomSocket {
   /** 发一个带 req 的请求并等对应响应。 */
   request<T extends ServerMsg = ServerMsg>(
     payload: Record<string, unknown>,
-    timeoutMs = 12000
+    timeoutMs = 12000,
   ): Promise<T> {
     this.seq += 1;
     const req = `r${this.seq}`;
@@ -145,6 +179,9 @@ export class RoomSocket {
 
   close(): void {
     this.closedByUser = true;
+    document.removeEventListener('visibilitychange', this.resumePage);
+    window.removeEventListener('pageshow', this.resumePage);
+    window.clearTimeout(this.probeTimer);
     window.clearTimeout(this.reconnectTimer);
     this.stopHeartbeat();
     this.failPending(new Error('已离开房间'));
