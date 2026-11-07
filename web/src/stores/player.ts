@@ -1,19 +1,51 @@
 import { defineStore } from 'pinia';
+import { markRaw } from 'vue';
 import type { Track } from '@/types';
-import { fallbackMediaUrl } from '@/utils/media';
+import {
+  fallbackMediaUrl,
+  preferredMediaUrl,
+  rememberMediaSuccess,
+  forgetMediaUrl,
+} from '@/utils/media';
 
-const audio = new Audio();
+let audio = new Audio();
 audio.preload = 'auto';
-
 const STORE_VOLUME = 'yue.volume';
 let retryTimer = 0;
 let loadVersion = 0;
+let recovering = false;
 let lastProgressAt = Date.now();
 let lastProgressTime = 0;
 let wantsPlayback = false;
+type RefreshMedia = (track: Track, failedUrl: string, lower: boolean) => Promise<Track>;
+let refreshMedia: RefreshMedia | null = null;
+let sourceURL = '';
+let prepared: {
+  track: Track;
+  media: HTMLAudioElement;
+  timer: number;
+  retries: number;
+  refreshing: boolean;
+  resolvedURL: string;
+} | null = null;
+const sameEntry = (a: Track | null, b: Track | null) =>
+  !!a && !!b && (a.queueId ? a.queueId === b.queueId : a.source === b.source && a.id === b.id);
+
+function clearPrepared() {
+  const old = prepared;
+  prepared = null;
+  if (!old) return;
+  window.clearTimeout(old.timer);
+  old.media.pause();
+  old.media.removeAttribute('src');
+  old.media.load();
+}
 
 export const usePlayerStore = defineStore('player', {
   state: () => ({
+    // The active element changes only when a prepared next track is promoted.
+    media: markRaw(audio),
+    track: null as Track | null,
     ready: false,
     playing: false,
     loading: false,
@@ -28,161 +60,273 @@ export const usePlayerStore = defineStore('player', {
     blocked: false,
     failed: false,
     trackId: '',
-    /** 当前曲目的服务器开始时间与时钟偏移，用于对齐进度。 */
     startedAt: 0,
     offset: 0,
     _inited: false,
     _retries: 0,
   }),
   actions: {
-    /** Read wall-clock time on each call; a computed getter would cache Date.now(). */
     targetTime(): number {
-      if (!this.startedAt) return 0;
-      return Math.max(0, (Date.now() + this.offset - this.startedAt) / 1000);
+      return this.startedAt ? Math.max(0, (Date.now() + this.offset - this.startedAt) / 1000) : 0;
+    },
+    setRefreshHandler(handler: RefreshMedia | null) {
+      refreshMedia = handler;
+    },
+    bindMedia(el: HTMLAudioElement) {
+      const on = (name: string, handler: () => void) =>
+        el.addEventListener(name, () => {
+          if (el === audio) handler();
+        });
+      on('timeupdate', () => {
+        this.time = el.currentTime;
+        if (Math.abs(el.currentTime - lastProgressTime) > 0.05) {
+          lastProgressAt = Date.now();
+          lastProgressTime = el.currentTime;
+        }
+      });
+      on('loadedmetadata', () => {
+        this.duration = Number.isFinite(el.duration) ? el.duration : 0;
+        this.seekToTarget(true);
+      });
+      on('play', () => {
+        this.playing = true;
+        this.blocked = false;
+      });
+      on('pause', () => {
+        this.playing = false;
+      });
+      on('error', () => {
+        if (wantsPlayback) this.recover();
+      });
+      on('waiting', () => {
+        this.loading = true;
+      });
+      on('playing', () => {
+        this.loading = false;
+        this.failed = false;
+      });
+      on('canplay', () => {
+        this.ready = true;
+        this.loading = false;
+        if (this.track) rememberMediaSuccess(this.track.url, el.getAttribute('src') || '');
+      });
     },
     init() {
       if (this._inited) return;
       this._inited = true;
+      this.bindMedia(audio);
       audio.volume = this.volume;
       audio.muted = this.muted;
-      audio.addEventListener('timeupdate', () => {
-        this.time = audio.currentTime;
-        if (Math.abs(audio.currentTime - lastProgressTime) > 0.05) {
-          lastProgressAt = Date.now();
-          lastProgressTime = audio.currentTime;
-        }
-      });
-      audio.addEventListener('loadedmetadata', () => {
-        this.duration = Number.isFinite(audio.duration) ? audio.duration : 0;
-        this.seekToTarget(true);
-      });
-      audio.addEventListener('play', () => {
-        this.playing = true;
-        this.blocked = false;
-      });
-      audio.addEventListener('pause', () => {
-        this.playing = false;
-      });
-      audio.addEventListener('error', () => {
-        if (wantsPlayback) this.recover();
-      });
       window.setInterval(() => {
         if (
-          !wantsPlayback ||
-          this.blocked ||
-          this.failed ||
-          audio.ended ||
-          !audio.getAttribute('src')
+          wantsPlayback &&
+          !this.blocked &&
+          !this.failed &&
+          !audio.ended &&
+          audio.getAttribute('src') &&
+          Date.now() - lastProgressAt >
+            (audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ? 5000 : 12000)
         )
-          return;
-        if (Date.now() - lastProgressAt > 12000) this.recover();
+          this.recover();
       }, 1000);
-      audio.addEventListener('waiting', () => {
-        this.loading = true;
+    },
+    prepareNext(track: Track | null) {
+      this.init();
+      if (sameEntry(prepared?.track || null, track) && prepared?.track.url === track?.url) return;
+      clearPrepared();
+      if (!track?.url || sameEntry(this.track, track)) return;
+      const next = new Audio();
+      next.preload = 'auto';
+      this.bindMedia(next);
+      const candidate = {
+        track: { ...track },
+        media: next,
+        timer: 0,
+        retries: 0,
+        refreshing: false,
+        resolvedURL: track.url,
+      };
+      prepared = candidate;
+      const fallback = async () => {
+        if (prepared !== candidate || next === audio || candidate.refreshing) return;
+        window.clearTimeout(candidate.timer);
+        if (candidate.retries >= 2) return;
+        candidate.retries++;
+        let url = fallbackMediaUrl(next.src);
+        if (!url && refreshMedia && track.queueId) {
+          candidate.refreshing = true;
+          try {
+            const fresh = await refreshMedia(track, candidate.resolvedURL, candidate.retries > 1);
+            candidate.resolvedURL = fresh.url;
+            url = fresh.url;
+          } catch {
+            /* Current playback can still request a fresh source later. */
+          }
+          candidate.refreshing = false;
+        }
+        if (prepared !== candidate || next === audio || !url) return;
+        next.src = url;
+        next.load();
+        candidate.timer = window.setTimeout(() => {
+          if (next.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) void fallback();
+        }, 3500);
+      };
+      next.addEventListener('error', () => {
+        window.clearTimeout(candidate.timer);
+        candidate.timer = window.setTimeout(() => void fallback(), candidate.retries ? 2200 : 0);
       });
-      audio.addEventListener('playing', () => {
-        this.loading = false;
-        this.failed = false;
+      next.addEventListener('canplay', () => {
+        window.clearTimeout(candidate.timer);
+        rememberMediaSuccess(candidate.track.url, next.getAttribute('src') || '');
       });
-      audio.addEventListener('canplay', () => {
-        this.ready = true;
-        this.loading = false;
-      });
-      this.ready = audio.readyState >= 1;
+      next.src = preferredMediaUrl(track.url);
+      next.load();
+      candidate.timer = window.setTimeout(() => {
+        if (next.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) fallback();
+      }, 3500);
     },
     recover() {
-      if (retryTimer || !audio.getAttribute('src')) return;
-      this.blocked = false;
+      if (retryTimer || recovering || !wantsPlayback || !audio.getAttribute('src')) return;
       if (this._retries >= 2) {
         this.failed = true;
         this.loading = false;
         return;
       }
       this._retries++;
+      const attempt = this._retries;
       const version = loadVersion;
-      retryTimer = window.setTimeout(() => {
-        retryTimer = 0;
-        if (version !== loadVersion || !wantsPlayback) return;
-        const fallback = fallbackMediaUrl(audio.src);
-        if (fallback) audio.src = fallback;
-        lastProgressAt = Date.now();
-        lastProgressTime = 0;
-        this.loading = true;
-        audio.load();
-        void this.play();
-      }, 600 * this._retries);
+      const track = this.track;
+      if (track) forgetMediaUrl(track.url);
+      retryTimer = window.setTimeout(
+        async () => {
+          retryTimer = 0;
+          if (version !== loadVersion || !wantsPlayback) return;
+          recovering = true;
+          let refreshed: Track | null = null;
+          try {
+            if (refreshMedia && track?.queueId)
+              refreshed = await refreshMedia(track, sourceURL || track.url, attempt > 1);
+          } catch {
+            /* A local CDN fallback remains available when the API is temporarily unavailable. */
+          }
+          if (version !== loadVersion || !wantsPlayback) return;
+          recovering = false;
+          const oldUrl = audio.getAttribute('src') || '';
+          let url = refreshed?.url || '';
+          if (!url || url === oldUrl) url = fallbackMediaUrl(oldUrl) || url || oldUrl;
+          if (refreshed) sourceURL = refreshed.url;
+          lastProgressAt = Date.now();
+          lastProgressTime = 0;
+          this.loading = true;
+          this.blocked = false;
+          audio.src = url;
+          audio.load();
+          void this.play();
+        },
+        attempt === 1 ? 400 : 2200,
+      );
     },
     load(track: Track | null, startedAt: number, offset: number, autoPlay = true) {
       this.init();
+      const unchanged =
+        sameEntry(this.track, track) &&
+        this.startedAt === startedAt &&
+        this.track?.url === track?.url;
+      this.offset = offset;
+      if (unchanged) return;
       window.clearTimeout(retryTimer);
       retryTimer = 0;
-      loadVersion += 1;
+      recovering = false;
+      loadVersion++;
       wantsPlayback = autoPlay;
       lastProgressAt = Date.now();
       lastProgressTime = 0;
       this.startedAt = startedAt;
-      this.offset = offset;
       this._retries = 0;
       this.failed = false;
+      this.blocked = false;
+      this.track = track ? { ...track } : null;
+      sourceURL = track?.url || '';
       this.time = 0;
       this.duration = track?.duration || 0;
-      if (!track || !track.url) {
+      this.trackId = track?.id || '';
+      if (!track?.url) {
         wantsPlayback = false;
+        if (!track) clearPrepared();
         audio.pause();
         audio.removeAttribute('src');
         audio.load();
-        this.trackId = '';
         this.playing = false;
         this.loading = false;
-        this.blocked = false;
+        this.ready = false;
         return;
       }
-      if (track.id === this.trackId && audio.getAttribute('src') === track.url) {
+      if (
+        sameEntry(prepared?.track || null, track) &&
+        prepared?.track.url === track.url &&
+        !prepared.media.error
+      ) {
+        const old = audio;
+        const next = prepared!;
+        prepared = null;
+        window.clearTimeout(next.timer);
+        audio = next.media;
+        sourceURL = next.resolvedURL;
+        this.media = markRaw(audio);
+        old.pause();
+        old.removeAttribute('src');
+        old.load();
+        audio.volume = this.volume;
+        audio.muted = this.muted;
+        this.ready = audio.readyState >= HTMLMediaElement.HAVE_METADATA;
+        this.loading = audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
+        this.duration = Number.isFinite(audio.duration) ? audio.duration : track.duration;
         this.seekToTarget(true);
-        if (autoPlay && audio.paused) void this.play();
-        return;
+      } else {
+        if (sameEntry(prepared?.track || null, track)) clearPrepared();
+        this.ready = false;
+        this.loading = true;
+        if (audio.getAttribute('src') === track.url) this.seekToTarget(true);
+        else {
+          audio.src = preferredMediaUrl(track.url);
+          audio.load();
+        }
       }
-      this.trackId = track.id;
-      this.loading = true;
-      audio.src = track.url;
-      audio.load();
       if (autoPlay) void this.play();
     },
     async play(): Promise<void> {
+      this.init();
       if (!wantsPlayback) lastProgressAt = Date.now();
       wantsPlayback = true;
-      this.init();
       if (!audio.getAttribute('src')) return;
       const version = loadVersion;
       try {
         await audio.play();
         if (version === loadVersion) this.blocked = false;
-      } catch (error) {
+      } catch (e) {
         if (version !== loadVersion) return;
-        const name = error instanceof Error ? error.name : '';
+        const name = e instanceof Error ? e.name : '';
         if (name === 'AbortError') return;
         if (name === 'NotAllowedError') {
           this.blocked = true;
           this.loading = false;
-        } else {
-          this.recover();
-        }
+        } else this.recover();
       }
     },
     retry() {
-      wantsPlayback = true;
-      lastProgressAt = Date.now();
-      lastProgressTime = 0;
       window.clearTimeout(retryTimer);
       retryTimer = 0;
-      loadVersion += 1;
+      recovering = false;
+      loadVersion++;
       this._retries = 0;
       this.failed = false;
-      audio.load();
-      void this.play();
+      wantsPlayback = true;
+      this.recover();
     },
     pause() {
       wantsPlayback = false;
+      loadVersion++;
+      recovering = false;
       window.clearTimeout(retryTimer);
       retryTimer = 0;
       audio.pause();
@@ -195,51 +339,42 @@ export const usePlayerStore = defineStore('player', {
       }
     },
     setVolume(v: number) {
-      const vol = Math.max(0, Math.min(1, v));
-      this.volume = vol;
-      audio.volume = vol;
-      localStorage.setItem(STORE_VOLUME, String(vol));
-      if (vol > 0 && this.muted) this.toggleMute();
+      this.volume = Math.max(0, Math.min(1, v));
+      audio.volume = this.volume;
+      localStorage.setItem(STORE_VOLUME, String(this.volume));
+      if (this.volume > 0 && this.muted) this.toggleMute();
     },
     toggleMute() {
       this.muted = !this.muted;
       audio.muted = this.muted;
     },
-    /** 手动跳转到某秒（进度条点击）。 */
     seekTo(sec: number) {
-      if (!audio.src) return;
+      if (!audio.getAttribute('src')) return;
       try {
         audio.currentTime = Math.max(0, Math.min(sec, audio.duration || sec));
       } catch {
-        /* 元数据未就绪时忽略 */
+        /* metadata not ready */
       }
     },
-    /** 按服务器时间轴校正进度；偏差超过 1.5s 才 seek，避免频繁跳。 */
     seekToTarget(force = false) {
-      if (!audio.src || !Number.isFinite(audio.duration) || audio.duration <= 0 || audio.seeking)
+      if (
+        !audio.getAttribute('src') ||
+        !Number.isFinite(audio.duration) ||
+        audio.duration <= 0 ||
+        audio.seeking
+      )
         return;
-      // Do not interrupt an in-flight seek or chase the clock while the network is buffering.
       if (!force && audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
       const target = Math.min(this.targetTime(), audio.duration - 0.5);
       if (target < 0) return;
       if (!force) {
-        // Slow connections should keep playing downloaded audio instead of seeking into another request.
         let buffered = false;
-        for (let i = 0; i < audio.buffered.length; i++) {
+        for (let i = 0; i < audio.buffered.length; i++)
           if (audio.buffered.start(i) <= target && target < audio.buffered.end(i)) buffered = true;
-        }
         if (!buffered) return;
       }
-      // 只向前纠偏：目标落后于当前位置时不回拉，避免换歌瞬间 seek 触发二次缓冲。
-      if (force || target - audio.currentTime > 1.5) {
-        try {
-          audio.currentTime = target;
-        } catch {
-          /* 元数据未就绪时忽略 */
-        }
-      }
+      if (force || target - audio.currentTime > 1.5) this.seekTo(target);
     },
-    /** 由 room store 在每次收到 startedAt 时调用。 */
     sync(offset: number) {
       this.offset = offset;
       this.seekToTarget();

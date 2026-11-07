@@ -37,6 +37,9 @@ func (c *Client) handle(m *inMsg) {
 		code, msg := c.room.pick(c, t)
 		c.reply(code, msg, m.Req)
 
+	case "media.refresh":
+		c.handleMediaRefresh(m)
+
 	case "search":
 		c.handleSearch(m)
 

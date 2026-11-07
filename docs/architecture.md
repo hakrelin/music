@@ -274,3 +274,11 @@ location / {
 - 每个队列项带唯一 `queueId`；同歌多次入队也各自计票。`queue.remove.vote {id:<queueId>}` 对待播项投票，同一连接限一票，达到 `ceil(在线人数 × voteSkipRatio)` 即删除。广播中的待播项含 `removeVotes/removeNeed`。当前歌曲继续使用 `skip.vote`；禁切歌同时禁止普通听众投票删除。
 - 删除/清空/开始播放后丢弃该项删除票，断线时移除对应连接的票。人数变化更新阈值，在下次有效投票时判断通过。
 - 播放器在用户希望播放但超过 12 秒无进度时重载音源，沿用等价 CDN 重试，最多自动恢复两次；手动暂停和浏览器禁止自动播放时不触发。单个客户端的卡顿不自动切换整个房间。周期同步仅向已缓冲位置纠偏；重新载入和手动恢复允许强制对齐。
+
+## 提前准备、歌词补发与播放地址刷新
+
+- `snapshot.next` 为已经解析好的下一首 Track 或 null。它不并入正式队列；正式队列仍仅当前曲目带 URL。
+- 服务端 `prepare {track: Track|null}` 通知候选准备或撤销，Track 包含唯一 queueId 与 URL。随机候选与实际推进共用同一个选择；过期后台结果通过 generation 丢弃。准备失败退避 5 秒，已准备地址约 2 分钟刷新。
+- 服务端 `lyric {queueId,startedAt,lyric,lyricTrans}` 异步补歌词，不发送新 current、不重新加载音频。
+- 客户端 `media.refresh {req,id:<queueId>,failedUrl,lower}`；返回 `{t:"media.refresh",req,track}`。failedUrl 仅用于有条件淘汰相同缓存地址，不作为服务器请求目标；lower=true 请求 128k（provider 支持时）。当前或下一首以外的 ID 拒绝，成功结果只发给请求者，不改全房队列/时间轴。
+- 取址缓存按 source/id/音质分开，并发请求合并。当前播放失败不自动全房跳歌。前端离房释放备用媒体，暂停或换歌使旧的恢复请求失效。

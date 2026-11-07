@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,13 +165,14 @@ func TestPickDuringSlowResolveStartsAndKeepsQueue(t *testing.T) {
 }
 
 type slowProvider struct {
+	once sync.Once
 	*demo.Provider
 	entered chan struct{}
 	release chan struct{}
 }
 
 func (p *slowProvider) Resolve(ctx context.Context, track *model.Track) error {
-	close(p.entered)
+	p.once.Do(func() { close(p.entered) })
 	select {
 	case <-p.release:
 	case <-ctx.Done():

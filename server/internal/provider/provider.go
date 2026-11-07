@@ -79,3 +79,8 @@ func (r *Registry) Names() []string {
 type UserSearcher interface {
 	SearchUsers(context.Context, string, int, int) ([]model.User, int, error)
 }
+
+// RefreshProvider can lower quality when the client cannot play the original stream.
+type RefreshProvider interface {
+	ResolveFresh(context.Context, *model.Track, bool) error
+}

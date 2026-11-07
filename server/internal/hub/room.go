@@ -32,9 +32,17 @@ type Room struct {
 
 	clients map[*Client]struct{}
 
-	queue     []model.Track
-	startedAt int64  // 毫秒；0 表示当前没有播放
-	version   uint64 // 队列结构版本，用于"解析 URL 期间队列被改动"的校验
+	prepareFor        string
+	nextID            string
+	prepared          *model.Track
+	prepareCancel     context.CancelFunc
+	prepareExpiry     time.Time
+	prepareRetry      time.Time
+	prepareGeneration uint64
+	preparing         bool
+	queue             []model.Track
+	startedAt         int64  // 毫秒；0 表示当前没有播放
+	version           uint64 // 队列结构版本，用于"解析 URL 期间队列被改动"的校验
 	// lastAdvanceAt 是上次推进的服务器毫秒时间，用于切歌防抖（见 advance）。
 	lastAdvanceAt int64
 
@@ -266,6 +274,7 @@ func (r *Room) broadcastCurrent() {
 
 // broadcastQueueLocked / broadcastCurrentLocked 是持锁版本，供状态机内部使用。
 func (r *Room) broadcastQueueLocked() {
+	r.prepareNextLocked()
 	r.broadcastLocked(r.queuePayloadLocked())
 }
 
@@ -277,6 +286,7 @@ func (r *Room) broadcastState() {
 	r.mu.Lock()
 	p := r.statePayloadLocked()
 	r.broadcastLocked(p)
+	r.prepareNextLocked()
 	r.mu.Unlock()
 }
 
@@ -328,6 +338,7 @@ func (r *Room) snapshotPayloadLocked() []byte {
 	copy(chat, r.messages)
 	return mustJSON(snapshotOut{
 		T:         "snapshot",
+		Next:      r.prepared,
 		Online:    len(r.clients),
 		Queue:     q,
 		StartedAt: r.startedAt,
@@ -367,10 +378,6 @@ func (r *Room) doStart() {
 		r.mu.Unlock()
 
 		err := r.hub.resolveTrack(context.Background(), &cand)
-		if err == nil {
-			// 只有当前播放的曲目才拉歌词（docs §2 补充契约）。
-			r.hub.fillLyric(context.Background(), &cand)
-		}
 
 		r.mu.Lock()
 		if r.closed || r.startedAt > 0 || len(r.queue) == 0 || r.queue[0].QueueID != cand.QueueID {
@@ -392,7 +399,9 @@ func (r *Room) doStart() {
 		r.version++
 		r.broadcastCurrentLocked()
 		r.broadcastQueueLocked()
+		started := r.startedAt
 		r.mu.Unlock()
+		go r.loadLyrics(cand, started)
 		return
 	}
 
@@ -442,19 +451,17 @@ func (r *Room) advance(reason string) {
 }
 
 func (r *Room) doAdvance(reason string) {
+	switchStarted := time.Now()
 	for attempt := 0; attempt < 4; attempt++ {
 		r.mu.Lock()
 		if r.closed || len(r.queue) == 0 {
 			r.mu.Unlock()
 			return
 		}
-		version := r.version
+		fromID := r.queue[0].QueueID
 		idx := 0
 		if len(r.queue) > 1 {
-			idx = 1
-			if r.random {
-				idx = 1 + rand.IntN(len(r.queue)-1)
-			}
+			idx = r.nextIndexLocked()
 		} else {
 			// 队列里只剩当前这一首。
 			replay := r.loop || r.random || r.modeRadio || r.isRadio || reason == "manual" || reason == "vote"
@@ -472,11 +479,21 @@ func (r *Room) doAdvance(reason string) {
 			idx = 0 // 重播同一首
 		}
 		cand := r.queue[idx]
+		ready := r.prepared != nil && r.prepared.QueueID == cand.QueueID && time.Now().Before(r.prepareExpiry)
+		if ready {
+			cand.URL = r.prepared.URL
+			if cand.Cover == "" {
+				cand.Cover = r.prepared.Cover
+			}
+			if cand.Duration <= 0 {
+				cand.Duration = r.prepared.Duration
+			}
+		}
 		r.mu.Unlock()
 
-		err := r.hub.resolveTrack(context.Background(), &cand)
-		if err == nil {
-			r.hub.fillLyric(context.Background(), &cand)
+		var err error
+		if !ready {
+			err = r.hub.resolveTrack(context.Background(), &cand)
 		}
 
 		r.mu.Lock()
@@ -484,8 +501,12 @@ func (r *Room) doAdvance(reason string) {
 			r.mu.Unlock()
 			return
 		}
-		if r.version != version {
-			// 解析期间队列被改动（点歌/删除），交给下一轮 tick 处理。
+		if len(r.queue) == 0 || r.queue[0].QueueID != fromID {
+			r.mu.Unlock()
+			return
+		}
+		idx = r.nextIndexLocked()
+		if idx < 0 || r.queue[idx].QueueID != cand.QueueID {
 			r.mu.Unlock()
 			return
 		}
@@ -513,7 +534,10 @@ func (r *Room) doAdvance(reason string) {
 		r.version++
 		r.broadcastCurrentLocked()
 		r.broadcastQueueLocked()
+		started := r.startedAt
 		r.mu.Unlock()
+		go r.loadLyrics(cand, started)
+		r.hub.log.Info("切歌完成", "room", r.id, "track", cand.ID, "prepared", ready, "elapsedMs", time.Since(switchStarted).Milliseconds())
 		return
 	}
 
@@ -756,6 +780,7 @@ func (r *Room) topTrack(c *Client, id string) (string, string) {
 	rest = append(rest, t)
 	rest = append(rest, r.queue[target:]...)
 	r.queue = rest
+	r.nextID = ""
 	r.version++
 	r.broadcastQueueLocked()
 	return "", ""
@@ -930,6 +955,7 @@ func (r *Room) setMode(c *Client, loop, random, radio *bool) (string, string) {
 	}
 	if random != nil {
 		r.random = *random
+		r.nextID = ""
 	}
 	radioOn := false
 	if radio != nil {
@@ -938,6 +964,7 @@ func (r *Room) setMode(c *Client, loop, random, radio *bool) (string, string) {
 	}
 	p := r.statePayloadLocked()
 	r.broadcastLocked(p)
+	r.prepareNextLocked()
 	r.mu.Unlock()
 
 	if radioOn {

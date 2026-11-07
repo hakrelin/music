@@ -18,11 +18,15 @@ async function search(page, word = '恋') {
 }
 async function observeAudio(page) {
   await page.addInitScript(() => {
+    Object.defineProperty(window, '__testAudio', {get() {
+      return document.querySelector('#app')?.__vue_app__?.config.globalProperties.$pinia._s.get('player')?.media || window.__firstAudio;
+    }});
     const NativeAudio = window.Audio;
     window.Audio = class extends NativeAudio {
       constructor(...args) {
         super(...args);
-        window.__testAudio = this;
+        window.__firstAudio ||= this;
+        (window.__testAudioInstances ||= []).push(this);
       }
     };
   });
@@ -435,4 +439,117 @@ test('无报错的播放停滞会自动重载，手动暂停不触发重载', as
   await page.clock.fastForward(20000);
   expect(await page.evaluate(() => window.__audioLoads)).toBe(0);
   expect(await page.evaluate(() => window.__testAudio.paused)).toBe(true);
+});
+
+test('下一首提前下载，切歌复用已准备的播放器', async ({page, request}) => {
+  const id = await create(request, '预加载切换');
+  await observeAudio(page);
+  const audioRequests = [];
+  page.on('request', r => { if (r.url().includes('/api/demo/audio/')) audioRequests.push(r.url()); });
+  await joined(page, id);
+  await search(page, '恋');
+  await page.locator('.track').first().getByRole('button', {name:'点歌',exact:true}).click();
+  await page.getByPlaceholder('歌名 / 歌手 / 专辑').fill('竹');
+  await page.getByRole('button', {name:'搜索音乐',exact:true}).click();
+  await expect(page.locator('.t-name').first()).not.toHaveText('恋之瞳');
+  const nextName = await page.locator('.t-name').first().textContent();
+  await page.locator('.track').first().getByRole('button', {name:'点歌',exact:true}).click();
+  await page.keyboard.press('Escape');
+  await ensurePlaying(page);
+  await expect.poll(() => audioRequests.length).toBeGreaterThan(1);
+  await expect.poll(() => page.evaluate(() => window.__testAudioInstances.some(a => a !== window.__testAudio && a.readyState >= 3))).toBe(true);
+  await page.evaluate(() => { window.__beforeSwitchMedia = window.__testAudio; });
+  const before = audioRequests.length;
+  await page.getByTitle('投票切换到下一首', {exact:true}).click();
+  await expect(page.locator('.song-info h1')).toHaveText(nextName);
+  await expect.poll(() => page.evaluate(() => window.__testAudio !== window.__beforeSwitchMedia && !window.__testAudio.paused)).toBe(true);
+  expect(audioRequests.length).toBe(before);
+});
+
+test('预加载坏节点在切歌前完成回退，切歌沿用验证成功的地址', async ({page, request}) => {
+  const sample = await request.get('/api/demo/audio/d19.wav');
+  const body = await sample.body();
+  const hosts = [];
+  await page.route('https://m704.music.126.net/**', async route => { hosts.push('m704'); await route.fulfill({status:403,body:'Forbidden'}); });
+  await page.route('https://m701.music.126.net/**', async route => { hosts.push('m701'); await route.fulfill({status:200,contentType:'audio/wav',body}); });
+  await observeAudio(page);
+  const id = await create(request, '预加载节点回退');
+  await joined(page,id);
+  await search(page);
+  await page.locator('.track').first().getByRole('button', {name:'点歌',exact:true}).click();
+  await page.keyboard.press('Escape');
+  await ensurePlaying(page);
+  await page.evaluate(() => {
+    window.__preparedTrack = {id:'standby',queueId:'standby',source:'wy',name:'standby',artist:'',album:'',cover:'',duration:32,fee:0,url:'https://m704.music.126.net/20990101/signature/jdymusic/obj/standby.mp3'};
+    document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player').prepareNext(window.__preparedTrack);
+  });
+  await expect.poll(() => page.evaluate(() => window.__testAudioInstances.some(a => a !== window.__testAudio && a.readyState >= 3 && a.src.includes('m701')))).toBe(true);
+  await page.evaluate(() => {
+    const p = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player');
+    p.load(window.__preparedTrack,Date.now(),0,true);
+  });
+  await expect.poll(() => page.evaluate(() => window.__testAudio.currentTime)).toBeGreaterThan(0.1);
+  expect(hosts).toEqual(['m704','m701']);
+  expect(await page.evaluate(() => window.__testAudio.src)).toContain('m701.music.126.net');
+});
+
+test('迟到的播放地址刷新响应不会打断用户暂停', async ({page,request}) => {
+  const id = await create(request,'刷新暂停边界');
+  await observeAudio(page); await joined(page,id); await search(page);
+  await page.locator('.track').first().getByRole('button',{name:'点歌',exact:true}).click();
+  await page.keyboard.press('Escape');await ensurePlaying(page);
+  await page.evaluate(() => {
+    const p=document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player');
+    p.setRefreshHandler(track => new Promise(resolve => { window.__finishRefresh=()=>resolve({...track,url:track.url+'?late=1'}); }));
+    p.recover();
+  });
+  await expect.poll(() => page.evaluate(() => typeof window.__finishRefresh)).toBe('function');
+  await page.getByRole('button',{name:'暂停收听',exact:true}).click();
+  await page.evaluate(() => window.__finishRefresh());
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.__testAudio.paused)).toBe(true);
+  expect(await page.evaluate(() => window.__testAudio.src)).not.toContain('late=1');
+});
+
+test('下一首先于首曲就绪时保留备用播放器', async ({page,request}) => {
+  const id=await create(request,'预加载响应顺序');
+  await observeAudio(page);await joined(page,id);
+  await page.getByRole('button',{name:'添加歌曲',exact:true}).click();await page.keyboard.press('Escape');
+  await page.evaluate(()=>{
+    window.__earlyNext={id:'early',queueId:'early',source:'demo',name:'early',artist:'',album:'',cover:'',duration:32,fee:0,url:'/api/demo/audio/d01.wav'};
+    const p=document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player');
+    p.prepareNext(window.__earlyNext);
+  });
+  await expect.poll(()=>page.evaluate(()=>window.__testAudioInstances.some(a=>a!==window.__testAudio&&a.readyState>=3))).toBe(true);
+  await page.evaluate(()=>{
+    window.__earlyMedia=window.__testAudioInstances.find(a=>a!==window.__testAudio&&a.readyState>=3);
+    const p=document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player');
+    p.load({...window.__earlyNext,id:'initial',queueId:'initial',url:'/api/demo/audio/d19.wav'},Date.now(),0,true);
+  });
+  await ensurePlaying(page);
+  expect(await page.evaluate(()=>window.__earlyMedia.readyState)).toBeGreaterThanOrEqual(3);
+  await page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player').load(window.__earlyNext,Date.now(),0,true));
+  await expect.poll(()=>page.evaluate(()=>window.__testAudio===window.__earlyMedia&&!window.__testAudio.paused)).toBe(true);
+});
+
+test('下一首的非预设 CDN 失败时提前重新取址', async ({page,request}) => {
+  const id=await create(request,'预加载重新取址');
+  await observeAudio(page);await joined(page,id);
+  await page.route('https://source.invalid/**',route=>route.fulfill({status:503,body:'unavailable'}));
+  await page.getByRole('button',{name:'添加歌曲',exact:true}).click();await page.keyboard.press('Escape');
+  await page.evaluate(()=>{
+    const p=document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player');
+    window.__refreshCount=0;
+    p.setRefreshHandler(async track=>{window.__refreshCount++;return {...track,url:'/api/demo/audio/d01.wav'}});
+    window.__freshNext={id:'fresh-next',queueId:'fresh-next',source:'demo',name:'fresh-next',artist:'',album:'',cover:'',duration:32,fee:0,url:'https://source.invalid/song.mp3'};
+    p.prepareNext(window.__freshNext);
+  });
+  await expect.poll(()=>page.evaluate(()=>window.__testAudioInstances.some(a=>a!==window.__testAudio&&a.readyState>=3))).toBe(true);
+  expect(await page.evaluate(()=>window.__refreshCount)).toBe(1);
+  await page.evaluate(()=>{
+    window.__freshMedia=window.__testAudioInstances.find(a=>a!==window.__testAudio&&a.readyState>=3);
+    document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player').load(window.__freshNext,Date.now(),0,true);
+  });
+  await expect.poll(()=>page.evaluate(()=>window.__testAudio===window.__freshMedia&&!window.__testAudio.paused)).toBe(true);
+  expect(await page.evaluate(()=>window.__testAudio.src)).toContain('/api/demo/audio/d01.wav');
 });

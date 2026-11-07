@@ -89,6 +89,9 @@ export const useRoomStore = defineStore('room', {
     },
     connect(roomId: string, pwd = '') {
       this.leave();
+      usePlayerStore().setRefreshHandler((track, failedUrl, lower) =>
+        this.refreshMedia(track, failedUrl, lower),
+      );
       this.roomId = roomId;
       this.pwd = pwd;
       this.fatal = '';
@@ -111,6 +114,8 @@ export const useRoomStore = defineStore('room', {
       this.socket?.send({ t: 'hello', nick: this.nick, pwd: this.pwd });
     },
     leave() {
+      usePlayerStore().prepareNext(null);
+      usePlayerStore().setRefreshHandler(null);
       this.socket?.close();
       this.socket = null;
       this.connected = false;
@@ -155,6 +160,7 @@ export const useRoomStore = defineStore('room', {
           this.members = (msg.members as Member[]) || [];
           this.online = Number(msg.online || 0);
           this.chat = ((msg.chat as ChatMsg[]) || []).slice(-200);
+          usePlayerStore().prepareNext((msg.next as Track) || null);
           break;
         }
         case 'presence': {
@@ -172,12 +178,29 @@ export const useRoomStore = defineStore('room', {
         case 'current': {
           const track = msg.track as Track;
           const prev = this.queue[0];
-          this.startedAt = Number(msg.startedAt || Date.now());
-          if (!track) break;
+          this.startedAt = Number(msg.startedAt || 0);
+          if (!track) {
+            this.queue = [];
+            break;
+          }
+          const same = (t: Track) =>
+            track.queueId ? t.queueId === track.queueId : t.id === track.id;
           this.queue =
-            prev && prev.id === track.id
+            prev && same(prev)
               ? [{ ...prev, ...track }, ...this.queue.slice(1)]
-              : [track, ...this.queue.filter((t) => t.id !== track.id)];
+              : [track, ...this.queue.filter((t) => !same(t))];
+          break;
+        }
+        case 'prepare': {
+          usePlayerStore().prepareNext((msg.track as Track) || null);
+          break;
+        }
+        case 'lyric': {
+          const track = this.current;
+          if (track && track.queueId === msg.queueId && this.startedAt === Number(msg.startedAt)) {
+            track.lyric = String(msg.lyric || '');
+            track.lyricTrans = String(msg.lyricTrans || '');
+          }
           break;
         }
         case 'chat': {
@@ -331,6 +354,14 @@ export const useRoomStore = defineStore('room', {
         return;
       }
       this.socket?.send({ t: 'auth', role, password });
+    },
+    async refreshMedia(track: Track, failedUrl: string, lower: boolean): Promise<Track> {
+      if (!this.socket || !this.joined) throw new Error('尚未连接');
+      const res = await this.socket.request(
+        { t: 'media.refresh', id: track.queueId, failedUrl, lower },
+        10000,
+      );
+      return res.track as Track;
     },
     async voteRemove(id: string) {
       try {

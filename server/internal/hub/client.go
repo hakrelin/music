@@ -57,8 +57,9 @@ type Client struct {
 	send chan []byte
 	done chan struct{}
 
-	closeOnce sync.Once
-	joined    bool // 只在持房间锁时读写
+	closeOnce        sync.Once
+	lastMediaRefresh time.Time
+	joined           bool // 只在持房间锁时读写
 }
 
 func (c *Client) isAdmin() bool { return c.role == "admin" || c.role == "root" }

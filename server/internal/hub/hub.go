@@ -69,12 +69,15 @@ type Hub struct {
 	mu    sync.RWMutex
 	rooms map[string]*Room
 
-	reg     *provider.Registry
-	primary string
-	urls    *urlCache
-	presets []Preset
-	log     *slog.Logger
-	nowFn   func() time.Time
+	reg         *provider.Registry
+	primary     string
+	resolveMu   sync.Mutex
+	resolving   map[string]*resolveFlight
+	lastRefresh map[string]time.Time
+	urls        *urlCache
+	presets     []Preset
+	log         *slog.Logger
+	nowFn       func() time.Time
 
 	rootPassword  string
 	adminPassword string
@@ -109,6 +112,8 @@ func New(opts Options) *Hub {
 		reg:           opts.Registry,
 		primary:       opts.PrimaryProvider,
 		urls:          newURLCache(),
+		resolving:     make(map[string]*resolveFlight),
+		lastRefresh:   make(map[string]time.Time),
 		log:           opts.Logger,
 		nowFn:         opts.Now,
 		rootPassword:  opts.RootPassword,
@@ -251,6 +256,7 @@ func (h *Hub) tick() {
 			r.mu.Unlock()
 			continue
 		}
+		r.prepareNextLocked()
 		needStart := len(r.queue) > 0 && r.startedAt == 0 && !r.busy
 		due := false
 		if len(r.queue) > 0 && r.startedAt > 0 {

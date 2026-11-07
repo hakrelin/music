@@ -46,6 +46,7 @@ type stateOut struct {
 }
 
 type snapshotOut struct {
+	Next      *model.Track    `json:"next"`
 	T         string          `json:"t"`
 	Online    int             `json:"online"`
 	Queue     []model.Track   `json:"queue"`
@@ -149,32 +150,34 @@ func mustJSON(v any) []byte {
 // inMsg 覆盖 docs §4.1 的全部字段。用指针区分"没传"和"传了零值"，
 // 这对 mode（缺省字段不改）和 volume（0 是合法音量）是必须的。
 type inMsg struct {
-	T        string `json:"t"`
-	Req      string `json:"req"`
-	Nick     string `json:"nick"`
-	Pwd      string `json:"pwd"`
-	Content  string `json:"content"`
-	ID       string `json:"id"`
-	Source   string `json:"source"`
-	Name     string `json:"name"`
-	Artist   string `json:"artist"`
-	Album    string `json:"album"`
-	Cover    string `json:"cover"`
-	Duration int    `json:"duration"`
-	Fee      int    `json:"fee"`
-	Q        string `json:"q"`
-	Page     int    `json:"page"`
-	Size     int    `json:"size"`
-	UID      string `json:"uid"`
-	Role     string `json:"role"`
-	Password string `json:"password"`
-	Preset   string `json:"preset"`
-	Loop     *bool  `json:"loop"`
-	Random   *bool  `json:"random"`
-	Radio    *bool  `json:"radio"`
-	Choose   *bool  `json:"choose"`
-	Switch   *bool  `json:"switch"`
-	On       *bool  `json:"on"`
-	Value    *int   `json:"value"`
-	Session  string `json:"session"`
+	T         string `json:"t"`
+	Req       string `json:"req"`
+	Nick      string `json:"nick"`
+	Pwd       string `json:"pwd"`
+	Content   string `json:"content"`
+	ID        string `json:"id"`
+	Source    string `json:"source"`
+	Name      string `json:"name"`
+	Artist    string `json:"artist"`
+	Album     string `json:"album"`
+	Cover     string `json:"cover"`
+	Duration  int    `json:"duration"`
+	Fee       int    `json:"fee"`
+	Q         string `json:"q"`
+	Page      int    `json:"page"`
+	Size      int    `json:"size"`
+	UID       string `json:"uid"`
+	Role      string `json:"role"`
+	Password  string `json:"password"`
+	Preset    string `json:"preset"`
+	Loop      *bool  `json:"loop"`
+	Random    *bool  `json:"random"`
+	Radio     *bool  `json:"radio"`
+	Choose    *bool  `json:"choose"`
+	Switch    *bool  `json:"switch"`
+	On        *bool  `json:"on"`
+	Value     *int   `json:"value"`
+	Session   string `json:"session"`
+	FailedURL string `json:"failedUrl"`
+	Lower     bool   `json:"lower"`
 }

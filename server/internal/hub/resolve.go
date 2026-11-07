@@ -68,38 +68,110 @@ func trackKey(t model.Track) string {
 //
 // 会先复制一份再交给 provider，避免 provider 实现意外改动调用方的
 // 队列元素；成功后才写回。
+type resolveFlight struct {
+	done   chan struct{}
+	entry  urlEntry
+	detail model.Track
+	err    error
+}
+
 func (h *Hub) resolveTrack(ctx context.Context, t *model.Track) error {
+	return h.resolveMedia(ctx, t, "", false)
+}
+
+func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string, lower bool) error {
 	if t == nil || strings.TrimSpace(t.ID) == "" {
 		return errors.New("曲目缺少 ID")
 	}
 	if t.Source == "" {
 		t.Source = h.primary
 	}
-	if e, ok := h.urls.get(trackKey(*t)); ok {
+	key := trackKey(*t)
+	if lower {
+		key += ":128k"
+	}
+	h.resolveMu.Lock()
+	if failedURL != "" && time.Since(h.lastRefresh[key]) >= 2*time.Second {
+		if h.lastRefresh == nil {
+			h.lastRefresh = make(map[string]time.Time)
+		}
+		if len(h.lastRefresh) > 4096 {
+			clear(h.lastRefresh)
+		}
+		h.lastRefresh[key] = time.Now()
+		h.urls.mu.Lock()
+		if old, ok := h.urls.m[key]; ok && old.url == failedURL {
+			delete(h.urls.m, key)
+		}
+		h.urls.mu.Unlock()
+	}
+	if e, ok := h.urls.get(key); ok {
+		h.resolveMu.Unlock()
 		t.URL = e.url
 		if t.Cover == "" {
 			t.Cover = e.cover
 		}
 		return nil
 	}
-	p, ok := h.reg.ForTrack(*t)
-	if !ok {
-		return fmt.Errorf("未知音乐源 %q", t.Source)
+	flight, exists := h.resolving[key]
+	if !exists {
+		flight = &resolveFlight{done: make(chan struct{})}
+		h.resolving[key] = flight
+		cp := *t
+		go func() {
+			resolveStarted := time.Now()
+			callCtx, cancel := context.WithTimeout(context.Background(), providerTimeout)
+			defer cancel()
+			p, ok := h.reg.ForTrack(cp)
+			var err error
+			if !ok {
+				err = fmt.Errorf("未知音乐源 %q", cp.Source)
+			} else if fresh, ok := p.(provider.RefreshProvider); ok && lower {
+				err = fresh.ResolveFresh(callCtx, &cp, true)
+			} else {
+				err = p.Resolve(callCtx, &cp)
+			}
+			if err == nil && strings.TrimSpace(cp.URL) == "" {
+				err = errors.New("音乐源没有返回播放地址")
+			}
+			h.log.Info("播放地址解析完成", "source", cp.Source, "track", cp.ID, "lower", lower, "elapsedMs", time.Since(resolveStarted).Milliseconds(), "ok", err == nil)
+			h.resolveMu.Lock()
+			if err == nil {
+				h.urls.put(key, cp.URL, cp.Cover)
+				flight.entry = urlEntry{url: cp.URL, cover: cp.Cover}
+				flight.detail = cp
+			}
+			flight.err = err
+			delete(h.resolving, key)
+			close(flight.done)
+			h.resolveMu.Unlock()
+		}()
 	}
-	cp := *t
-	callCtx, cancel := context.WithTimeout(ctx, providerTimeout)
-	defer cancel()
-	if err := p.Resolve(callCtx, &cp); err != nil {
-		return err
+	h.resolveMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-flight.done:
 	}
-	if strings.TrimSpace(cp.URL) == "" {
-		return fmt.Errorf("provider %s 没有返回播放地址", p.Name())
+	if flight.err != nil {
+		return flight.err
 	}
-	if cp.Source == "" {
-		cp.Source = p.Name()
+	t.URL = flight.entry.url
+	if t.Name == "" {
+		t.Name = flight.detail.Name
 	}
-	h.urls.put(trackKey(cp), cp.URL, cp.Cover)
-	*t = cp
+	if t.Artist == "" {
+		t.Artist = flight.detail.Artist
+	}
+	if t.Album == "" {
+		t.Album = flight.detail.Album
+	}
+	if t.Duration <= 0 {
+		t.Duration = flight.detail.Duration
+	}
+	if t.Cover == "" {
+		t.Cover = flight.entry.cover
+	}
 	return nil
 }
 

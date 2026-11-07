@@ -17,3 +17,30 @@ export function fallbackMediaUrl(src: string): string | null {
     return null;
   }
 }
+
+// Reuse only an exact signed URL whose alternate has actually reached canplay.
+// Never infer that the same host substitution works for another path or song.
+const verified = new Map<string, { url: string; expires: number }>();
+export function preferredMediaUrl(original: string): string {
+  const entry = verified.get(original);
+  if (entry && entry.expires > Date.now()) return entry.url;
+  verified.delete(original);
+  return original;
+}
+export function rememberMediaSuccess(original: string, actual: string) {
+  if (!original || !actual || original === actual) return;
+  let url = original;
+  let allowed = false;
+  for (let i = 0; i < 2; i++) {
+    const next = fallbackMediaUrl(url);
+    if (!next) break;
+    if (next === actual) allowed = true;
+    url = next;
+  }
+  if (!allowed) return;
+  if (verified.size >= 32) verified.delete(verified.keys().next().value!);
+  verified.set(original, { url: actual, expires: Date.now() + 120000 });
+}
+export function forgetMediaUrl(original: string) {
+  verified.delete(original);
+}

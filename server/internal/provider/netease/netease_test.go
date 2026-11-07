@@ -121,7 +121,6 @@ func TestWeapiRetryThenSuccess(t *testing.T) {
 
 	p := New(Config{Cookie: "MUSIC_U=test; __csrf=csrftest", TimeoutSeconds: 5})
 	p.baseURL = server.URL + "/weapi/"
-	p.probe = func(context.Context, string) bool { return true }
 
 	lyric, err := p.Lyric(context.Background(), "123")
 	if err != nil {
@@ -146,7 +145,6 @@ func TestWeapiBusinessErrorNoRetry(t *testing.T) {
 
 	p := New(Config{TimeoutSeconds: 5})
 	p.baseURL = server.URL + "/weapi/"
-	p.probe = func(context.Context, string) bool { return true }
 
 	_, err := p.Lyric(context.Background(), "123")
 	if err == nil {
@@ -243,7 +241,6 @@ func newMockProvider(t *testing.T, handler http.HandlerFunc) *Provider {
 	t.Cleanup(server.Close)
 	p := New(Config{TimeoutSeconds: 5})
 	p.baseURL = server.URL + "/weapi/"
-	p.probe = func(context.Context, string) bool { return true }
 	return p
 }
 
@@ -922,14 +919,14 @@ func TestSearchUsersMapping(t *testing.T) {
 	}
 }
 
-func TestResolveRetriesFailedProbe(t *testing.T) {
+func TestResolveDoesNotProbeCDN(t *testing.T) {
+	calls := 0
 	p := newMockProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"code":200,"data":[{"url":"https://m701.music.126.net/example.mp3","br":320000}]}`))
+		calls++
+		_, _ = w.Write([]byte(`{"code":200,"data":[{"url":"https://unreachable.invalid/audio.mp3","br":320000}]}`))
 	})
-	probes := 0
-	p.probe = func(context.Context, string) bool { probes++; return probes == 2 }
 	track := model.Track{ID: "1", Source: "wy"}
-	if err := p.Resolve(context.Background(), &track); err != nil || probes != 2 {
-		t.Fatalf("%v, probes=%d", err, probes)
+	if err := p.Resolve(context.Background(), &track); err != nil || calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, calls)
 	}
 }
