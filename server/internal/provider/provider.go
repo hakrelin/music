@@ -26,6 +26,24 @@ type Provider interface {
 	Lyric(ctx context.Context, id string) (string, error)
 }
 
+// LyricResult 是一首歌的歌词原文与翻译（翻译可能为空串）。
+type LyricResult struct {
+	Lrc   string
+	Trans string
+}
+
+// LyricProvider 是可选能力：能同时返回翻译的 provider 实现它，
+// hub 会优先用 LyricFull 来生成双语歌词。
+type LyricProvider interface {
+	LyricFull(ctx context.Context, id string) (LyricResult, error)
+}
+
+// DetailProvider 是可选能力：按 ID 补齐单曲元数据（时长/封面/fee）。
+// hub 在用户点歌时用它兜底，保证队列里的时长不是 0。
+type DetailProvider interface {
+	TrackDetail(ctx context.Context, id string) (model.Track, error)
+}
+
 // Registry 按 source 路由到 Provider。
 type Registry struct {
 	byName map[string]Provider

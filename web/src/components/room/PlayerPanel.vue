@@ -45,7 +45,7 @@ watch(
       <small v-if="track?.album">{{ track.album }}</small>
     </div>
     <div v-if="lines.length" class="lyric-box">
-      <LyricScroller :lines="lines" :time="player.time" />
+      <LyricScroller :lines="lines" :time="player.time" :trans-raw="room.current?.lyricTrans" />
     </div>
     <div v-else class="instrumental">
       <span class="lyric-dot">♪</span>

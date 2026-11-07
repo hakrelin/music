@@ -49,7 +49,7 @@ function turnPage(delta: number) {
 }
 
 function pick(track: Track) {
-  room.pick({ id: track.id, source: track.source, name: track.name });
+  room.pick({ id: track.id, source: track.source, name: track.name, artist: track.artist, album: track.album, cover: track.cover, duration: track.duration, fee: track.fee });
   ui.ok(`已点歌：${track.name}`);
 }
 
@@ -106,7 +106,7 @@ function pickAll() {
   const rest = currentTracks.value.filter((t) => !picked.value.has(t.id)).slice(0, 20);
   if (!rest.length) return ui.warn('没有可以加入的曲目');
   rest.forEach((t) => {
-    room.pick({ id: t.id, source: t.source, name: t.name });
+    room.pick({ id: t.id, source: t.source, name: t.name, artist: t.artist, album: t.album, cover: t.cover, duration: t.duration, fee: t.fee });
     picked.value.add(t.id);
   });
   ui.ok(`已加入 ${rest.length} 首（单次最多 20 首）`);
@@ -114,7 +114,7 @@ function pickAll() {
 
 function pickOne(t: Track) {
   if (picked.value.has(t.id)) return;
-  room.pick({ id: t.id, source: t.source, name: t.name });
+  room.pick({ id: t.id, source: t.source, name: t.name, artist: t.artist, album: t.album, cover: t.cover, duration: t.duration, fee: t.fee });
   picked.value.add(t.id);
   ui.ok(`已点歌：${t.name}`);
 }

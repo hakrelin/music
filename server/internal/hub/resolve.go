@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hakrelin/music/server/internal/model"
+	"github.com/hakrelin/music/server/internal/provider"
 )
 
 // providerTimeout 是单次 provider 调用的上限。
@@ -118,6 +119,14 @@ func (h *Hub) fillLyric(ctx context.Context, t *model.Track) {
 	callCtx, cancel := context.WithTimeout(ctx, providerTimeout)
 	defer cancel()
 	lrc, err := p.Lyric(callCtx, t.ID)
+	if lp, ok := p.(provider.LyricProvider); ok {
+		if full, ferr := lp.LyricFull(callCtx, t.ID); ferr == nil {
+			lrc, err = full.Lrc, nil
+			if strings.TrimSpace(full.Trans) != "" {
+				t.LyricTrans = full.Trans
+			}
+		}
+	}
 	if err != nil || strings.TrimSpace(lrc) == "" {
 		return
 	}

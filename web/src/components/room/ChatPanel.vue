@@ -37,6 +37,10 @@ function color(name: string) {
 </script>
 <template>
   <section class="chat-panel" aria-label="房间聊天">
+    <div class="members" aria-label="在线成员">
+      <span class="m-label">在线 {{ room.members.length || room.online }} 人</span>
+      <span v-for="m in room.members" :key="m.nick" class="m-chip" :class="m.role">{{ m.nick }}</span>
+    </div>
     <header>
       <h2 class="panel-title"><Icon name="chat" :size="17" />一起聊聊</h2>
       <span><i class="online-dot" />{{ room.online }} 人在听</span>
@@ -306,4 +310,8 @@ header .online-dot {
     font-size: 12px;
   }
 }
+.members { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #e6e3da; }
+.m-label { font-size: 11px; color: #8b8f86; }
+.m-chip { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: #eef1ea; color: #4d5648; }
+.m-chip.admin, .m-chip.root { background: #e3f0e6; color: #1d6b3a; font-weight: 600; }
 </style>

@@ -145,11 +145,16 @@ func (p *Provider) searchCloud(ctx context.Context, q string, page, size int) ([
 	if err := p.weapi(ctx, "cloudsearch/get/web", payload, &resp); err != nil {
 		return nil, 0, err
 	}
-	tracks := make([]model.Track, 0, len(resp.Result.Songs))
+	ids := make([]int64, 0, len(resp.Result.Songs))
 	for _, s := range resp.Result.Songs {
-		tracks = append(tracks, s.toTrack(nil))
+		ids = append(ids, s.ID)
 	}
-	return tracks, resp.Result.SongCount, nil
+	enriched, fees, err := p.songsByIDs(ctx, ids)
+	if err != nil {
+		enriched = nil
+		fees = nil
+	}
+	return mergeSongsByID(resp.Result.Songs, enriched, fees), resp.Result.SongCount, nil
 }
 
 // searchLegacy 是老搜索接口 /weapi/search/get（匿名可用）。
@@ -402,16 +407,34 @@ func (p *Provider) Resolve(ctx context.Context, t *model.Track) error {
 // resolveURL 依次尝试 320k、128k，返回第一个非空地址。
 func (p *Provider) resolveURL(ctx context.Context, songID int64) (string, int, error) {
 	var lastErr error
+	// 网易云会按请求轮换 CDN 域名，部分 CDN 对来源校验很严（浏览器直连会 403/超时，
+	// 表现就是「一直在缓冲」）。所以每个码率多取几次，拿到地址后先探一次，
+	// 探不通就换下一个（下一次请求通常会换到别的 CDN 主机）。
+	var fallbackURL string
+	var fallbackBr int
 	for _, br := range []int{320000, 128000} {
-		url, gotBr, err := p.songURL(ctx, songID, br)
-		if err != nil {
-			lastErr = err
-			continue
+		for attempt := 0; attempt < 2; attempt++ {
+			url, gotBr, err := p.songURL(ctx, songID, br)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if url == "" {
+				lastErr = fmt.Errorf("br=%d 返回空地址（可能无版权或需要 VIP）", br)
+				break
+			}
+			if fallbackURL == "" {
+				fallbackURL, fallbackBr = url, gotBr
+			}
+			if probeAudio(ctx, url) {
+				return url, gotBr, nil
+			}
+			lastErr = fmt.Errorf("br=%d 的 CDN 地址探测失败（%s）", br, cdnHost(url))
 		}
-		if url != "" {
-			return url, gotBr, nil
-		}
-		lastErr = fmt.Errorf("br=%d 返回空地址（可能无版权或需要 VIP）", br)
+	}
+	if fallbackURL != "" {
+		// 全都不通过探测：仍然返回第一个地址，让浏览器去试（前端还有重试）。
+		return fallbackURL, fallbackBr, nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("没有可用的播放地址")
@@ -444,20 +467,32 @@ func (p *Provider) songURL(ctx context.Context, songID int64, br int) (string, i
 
 // Lyric 取 LRC 歌词原文；没有歌词时返回空串而不是错误。
 func (p *Provider) Lyric(ctx context.Context, id string) (string, error) {
+	r, err := p.LyricFull(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return r.Lrc, nil
+}
+
+// LyricFull 同时给出原文与翻译（tv=-1 时网易云会返回 tlyric），用于双语歌词。
+func (p *Provider) LyricFull(ctx context.Context, id string) (provider.LyricResult, error) {
 	songID, err := parseNumericID(id)
 	if err != nil {
-		return "", fmt.Errorf("netease.Lyric: %w", err)
+		return provider.LyricResult{}, fmt.Errorf("netease.Lyric: %w", err)
 	}
 	var resp struct {
 		Lrc struct {
 			Lyric string `json:"lyric"`
 		} `json:"lrc"`
+		Tlyric struct {
+			Lyric string `json:"lyric"`
+		} `json:"tlyric"`
 	}
 	// lv/kv/tv 都传 -1 表示要原版 + 翻译 + 罗马音（接口会按可用性返回）。
 	if err := p.weapi(ctx, "song/lyric", map[string]any{"id": songID, "lv": -1, "kv": -1, "tv": -1}, &resp); err != nil {
-		return "", fmt.Errorf("netease.Lyric(%s): %w", id, err)
+		return provider.LyricResult{}, fmt.Errorf("netease.Lyric(%s): %w", id, err)
 	}
-	return resp.Lrc.Lyric, nil
+	return provider.LyricResult{Lrc: resp.Lrc.Lyric, Trans: resp.Tlyric.Lyric}, nil
 }
 
 // ---- 网易云响应结构 ----
@@ -537,6 +572,9 @@ func (s wySong) toTrack(feeByID map[int64]int) model.Track {
 	millis := s.Dt
 	if millis <= 0 {
 		millis = s.Duration
+		if millis == 0 {
+			millis = s.Dt // cloudsearch 的时长在 dt 里
+		}
 	}
 
 	fee, known := 0, false
@@ -779,3 +817,59 @@ func minInt(a, b int) int {
 
 // 编译期断言：netease.Provider 必须满足 provider.Provider 接口（契约见 docs/architecture.md §5）。
 var _ provider.Provider = (*Provider)(nil)
+
+// probeAudio 用一次 Range 请求确认这个 CDN 地址真的能取到音频字节。
+func probeAudio(ctx context.Context, url string) bool {
+	cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Range", "bytes=0-1023")
+	req.Header.Set("Referer", "https://music.163.com/")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return false
+	}
+	buf := make([]byte, 512)
+	n, _ := resp.Body.Read(buf)
+	return n > 0
+}
+
+func cdnHost(u string) string {
+	if i := strings.Index(u, "://"); i >= 0 {
+		rest := u[i+3:]
+		if j := strings.IndexAny(rest, "/?#"); j >= 0 {
+			return rest[:j]
+		}
+		return rest
+	}
+	return u
+}
+
+// TrackDetail 补齐单曲元数据（时长/封面/fee），供 hub 在点歌时兜底。
+func (p *Provider) TrackDetail(ctx context.Context, id string) (model.Track, error) {
+	songID, err := parseNumericID(id)
+	if err != nil {
+		return model.Track{}, fmt.Errorf("netease.TrackDetail: %w", err)
+	}
+	enriched, fees, err := p.songsByIDs(ctx, []int64{songID})
+	if err != nil {
+		return model.Track{}, fmt.Errorf("netease.TrackDetail(%s): %w", id, err)
+	}
+	if len(enriched) == 0 {
+		return model.Track{}, fmt.Errorf("netease.TrackDetail(%s): 详情为空", id)
+	}
+	t := enriched[0].toTrack(nil)
+	if len(fees) > 0 {
+		t.Fee = fees[0]
+	}
+	t.Source = sourceName
+	return t, nil
+}

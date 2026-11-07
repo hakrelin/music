@@ -6,6 +6,7 @@ import { usePlayerStore } from '@/stores/player';
 import { useUiStore } from '@/stores/ui';
 import type {
   ChatMsg,
+  Member,
   Playlist,
   PlaylistSearchResult,
   Role,
@@ -60,6 +61,7 @@ export const useRoomStore = defineStore('room', {
     } | null,
     self: null as SelfInfo | null,
     online: 0,
+    members: [] as Member[],
     queue: [] as Track[],
     startedAt: 0,
     clockOffset: 0,
@@ -117,6 +119,7 @@ export const useRoomStore = defineStore('room', {
       this.queue = [];
       this.startedAt = 0;
       this.online = 0;
+      this.members = [];
       this.chat = [];
       this.mode = defaultMode();
       this.votes = 0;
@@ -146,11 +149,13 @@ export const useRoomStore = defineStore('room', {
         case 'snapshot': {
           this.queue = (msg.queue as Track[]) || [];
           this.startedAt = Number(msg.startedAt || 0);
+          this.members = (msg.members as Member[]) || [];
           this.online = Number(msg.online || 0);
           this.chat = ((msg.chat as ChatMsg[]) || []).slice(-200);
           break;
         }
         case 'presence': {
+          this.members = (msg.members as Member[]) || [];
           this.online = Number(msg.online || 0);
           break;
         }
@@ -228,7 +233,7 @@ export const useRoomStore = defineStore('room', {
       }
       this.socket?.send({ t: 'chat', content: text });
     },
-    pick(track: Pick<Track, 'id' | 'source' | 'name'>) {
+    pick(track: Pick<Track, 'id' | 'source' | 'name' | 'artist' | 'album' | 'cover' | 'duration' | 'fee'>) {
       if (this.mock) {
         this.queue.push({
           ...track,

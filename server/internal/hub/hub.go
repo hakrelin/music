@@ -413,5 +413,7 @@ func trackDuration(t model.Track) int {
 	if t.Duration > 0 {
 		return t.Duration
 	}
-	return 240
+	// 时长未知时不要把歌提前切断：客户端点歌会带上 duration，老客户端/异常数据
+	// 才走到这里，用 300 秒兜底（原来是 240，4 分钟以上的曲子会被拦腰截断）。
+	return 300
 }

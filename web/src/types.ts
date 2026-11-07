@@ -14,6 +14,13 @@ export interface Track {
   likes?: number;
   /** 只有「当前播放」的曲目带 LRC 原文。 */
   lyric?: string;
+  /** 与 lyric 同时间轴的翻译（可能没有）。 */
+  lyricTrans?: string;
+}
+
+export interface Member {
+  nick: string;
+  role: 'guest' | 'admin' | 'root' | string;
 }
 
 export interface Playlist {

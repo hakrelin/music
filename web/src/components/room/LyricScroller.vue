@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { activeLyricIndex, type LyricLine } from '@/utils/lyric';
+import { activeLyricIndex, parseLrc, type LyricLine } from '@/utils/lyric';
 
-const props = defineProps<{ lines: LyricLine[]; time: number }>();
+const props = defineProps<{ lines: LyricLine[]; time: number; transRaw?: string }>();
+const transMap = computed(() => {
+  const m = new Map<number, string>();
+  for (const l of parseLrc(props.transRaw)) m.set(Math.round(l.time * 10), l.text);
+  return m;
+});
 const box = ref<HTMLElement | null>(null);
 const active = computed(() => activeLyricIndex(props.lines, props.time));
 
@@ -30,6 +35,7 @@ onMounted(scrollActive);
       :class="{ active: i === active, passed: i < active }"
     >
       {{ line.text }}
+      <span v-if="transMap.get(Math.round(line.time * 10))" class="trans">{{ transMap.get(Math.round(line.time * 10)) }}</span>
     </p>
   </div>
 </template>
@@ -57,7 +63,7 @@ onMounted(scrollActive);
   font-size: 16px;
   font-weight: 600;
 }
-.line.passed {
+.trans{display:block;font-size:11.5px;font-weight:400;color:#77806f;margin-top:2px}\n.line.passed {
   color: #666a63;
 }
 .empty {

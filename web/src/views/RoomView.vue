@@ -38,7 +38,9 @@ function key(e: KeyboardEvent) {
     e.preventDefault();
     player.toggle();
   }
-  if (e.code === 'ArrowRight' && !room.mode.banSwitch) room.voteSkip();
+  // → 键以前是「投票切歌」，正在听歌的人随手按方向键就会切歌（在线 1 人时一票即过），
+  // 现在只在按住 Alt 时才触发，正常切歌请点播放条上的按钮。
+  if (e.code === 'ArrowRight' && e.altKey && !room.mode.banSwitch) room.voteSkip();
 }
 async function share() {
   try {

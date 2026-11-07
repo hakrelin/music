@@ -15,6 +15,8 @@ type Track struct {
 	Likes    int    `json:"likes,omitempty"` // 点赞数
 	// Lyric 只在「当前播放」的曲目上填充（快照/current 消息），队列里的其它曲目为空。
 	Lyric string `json:"lyric,omitempty"`
+	// LyricTrans 是歌词翻译（与 Lyric 同一套时间轴，可能为空）。
+	LyricTrans string `json:"lyricTrans,omitempty"`
 }
 
 // Playlist 是歌单的公开信息。

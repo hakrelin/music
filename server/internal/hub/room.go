@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/hakrelin/music/server/internal/model"
+	"github.com/hakrelin/music/server/internal/provider"
 )
 
 // Room 是一个收听单元。docs §1：queue[0] 就是当前曲目，startedAt 是它
@@ -32,6 +34,8 @@ type Room struct {
 	queue     []model.Track
 	startedAt int64  // 毫秒；0 表示当前没有播放
 	version   uint64 // 队列结构版本，用于"解析 URL 期间队列被改动"的校验
+	// lastAdvanceAt 是上次推进的服务器毫秒时间，用于切歌防抖（见 advance）。
+	lastAdvanceAt int64
 
 	loop      bool
 	random    bool
@@ -216,7 +220,24 @@ func (r *Room) currentPayloadLocked() []byte {
 }
 
 func (r *Room) presencePayloadLocked() []byte {
-	return mustJSON(presenceOut{T: "presence", Online: len(r.clients)})
+	return mustJSON(presenceOut{T: "presence", Online: len(r.clients), Members: r.membersLocked()})
+}
+
+// membersLocked 返回房间在线成员（昵称 + 角色），按昵称排序。
+// 调用方必须持锁。
+func (r *Room) membersLocked() []memberOut {
+	out := make([]memberOut, 0, len(r.clients))
+	for c := range r.clients {
+		role := "guest"
+		if c.role == "root" {
+			role = "root"
+		} else if c.role == "admin" {
+			role = "admin"
+		}
+		out = append(out, memberOut{Nick: c.nick, Role: role})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Nick < out[j].Nick })
+	return out
 }
 
 // broadcastQueue / broadcastCurrent / broadcastState / broadcastPresence
@@ -305,6 +326,7 @@ func (r *Room) snapshotPayloadLocked() []byte {
 		StartedAt: r.startedAt,
 		Likes:     likes,
 		Chat:      chat,
+		Members:   r.membersLocked(),
 	})
 }
 
@@ -394,6 +416,14 @@ func (r *Room) advance(reason string) {
 			r.mu.Unlock()
 			return
 		}
+	}
+	// 防抖：1.2 秒内只允许推进一次。前端偶尔会重复发 skip.vote（按钮+快捷键、
+	// 或多端同时点），没有这道闸门就会连切两首。
+	if now := r.hub.Now(); now-r.lastAdvanceAt < 1200 {
+		r.mu.Unlock()
+		return
+	} else {
+		r.lastAdvanceAt = now
 	}
 	r.busy = true
 	r.mu.Unlock()
@@ -596,6 +626,22 @@ func (r *Room) pick(c *Client, t model.Track) (string, string) {
 	t.Nick = c.nick
 	t.Likes = 0
 	t.URL = ""
+	// 时长兜底：搜索接口偶尔给不出 duration，点歌时按 ID 补一次，
+	// 否则队列显示 00:00、自动切歌也会按 300 秒误判。
+	if t.Duration <= 0 {
+		if p, ok := r.hub.reg.ForTrack(t); ok {
+			if dp, ok2 := p.(provider.DetailProvider); ok2 {
+				if ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second); true {
+					if meta, derr := dp.TrackDetail(ctx, t.ID); derr == nil && meta.Duration > 0 {
+						t.Duration = meta.Duration
+						if t.Artist == "" { t.Artist = meta.Artist }
+						if t.Cover == "" { t.Cover = meta.Cover }
+					}
+					cancel()
+				}
+			}
+		}
+	}
 	r.queue = append(r.queue, t)
 	r.version++
 	r.broadcastQueueLocked()

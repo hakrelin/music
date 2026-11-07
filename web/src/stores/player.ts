@@ -191,7 +191,8 @@ export const usePlayerStore = defineStore('player', {
       if (!force && audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
       const target = Math.min(this.targetTime(), audio.duration - 0.5);
       if (target < 0) return;
-      if (Math.abs(audio.currentTime - target) > 1.5) {
+      // 只向前纠偏：目标落后于当前位置时不回拉，避免换歌瞬间 seek 触发二次缓冲。
+      if (target - audio.currentTime > 1.5) {
         try {
           audio.currentTime = target;
         } catch {

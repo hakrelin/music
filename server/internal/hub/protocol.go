@@ -52,11 +52,18 @@ type snapshotOut struct {
 	StartedAt int64           `json:"startedAt"`
 	Likes     map[string]int  `json:"likes"`
 	Chat      []model.ChatMsg `json:"chat"`
+	Members   []memberOut     `json:"members"`
+}
+
+type memberOut struct {
+	Nick string `json:"nick"`
+	Role string `json:"role"`
 }
 
 type presenceOut struct {
-	T      string `json:"t"`
-	Online int    `json:"online"`
+	T       string      `json:"t"`
+	Online  int         `json:"online"`
+	Members []memberOut `json:"members"`
 }
 
 type queueOut struct {
