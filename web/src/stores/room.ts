@@ -73,6 +73,8 @@ export const useRoomStore = defineStore('room', {
     // 同一首歌播完重新进队是新的一次，可以再次点赞。
     likedIds: [] as string[],
     voteNeed: 0,
+    // 进房看门狗：房间已关闭时及时停下，不再无限重连
+    joinWatchdog: 0,
   }),
   getters: {
     current: (s): Track | null => s.queue[0] || null,
@@ -119,6 +121,23 @@ export const useRoomStore = defineStore('room', {
       });
       this.socket = markRaw(socket);
       socket.connect();
+      // 看门狗：10 秒还没进房，就查一次房间是否还存在。
+      // 房间被回收时 WS 升级会 404，前端原本会无限重连（日志里一天几十次），
+      // 表现就是页面一直转圈/弹 connection closed。
+      window.clearTimeout(this.joinWatchdog);
+      this.joinWatchdog = window.setTimeout(async () => {
+        if (this.socket !== socket || this.joined || this.fatal) return;
+        try {
+          const res = await fetch('/api/rooms');
+          const list: { id: string }[] = (await res.json()).rooms || [];
+          if (!list.some((r) => r.id === roomId)) {
+            this.fatal = '这个房间已经关闭了，回大厅重新选一个吧';
+            socket.close();
+          }
+        } catch {
+          /* 取不到房间列表多半是网络问题，交给自动重连 */
+        }
+      }, 10000);
     },
     sendHello() {
       this.socket?.send({ t: 'hello', nick: this.nick, pwd: this.pwd });
@@ -127,6 +146,8 @@ export const useRoomStore = defineStore('room', {
       usePlayerStore().endSession();
       usePlayerStore().prepareNext(null);
       usePlayerStore().setRefreshHandler(null);
+      window.clearTimeout(this.joinWatchdog);
+      this.joinWatchdog = 0;
       this.socket?.close();
       this.socket = null;
       this.connected = false;
@@ -149,6 +170,8 @@ export const useRoomStore = defineStore('room', {
           this.room = msg.room as typeof this.room;
           this.clockOffset = Number(msg.now || Date.now()) - Date.now();
           this.joined = true;
+          window.clearTimeout(this.joinWatchdog);
+          this.joinWatchdog = 0;
           const ownerPassword = sessionStorage.getItem(`music.owner.${this.roomId}`);
           if (ownerPassword) void this.auth('root', ownerPassword);
           break;
