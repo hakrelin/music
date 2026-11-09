@@ -44,3 +44,14 @@ export function rememberMediaSuccess(original: string, actual: string) {
 export function forgetMediaUrl(original: string) {
   verified.delete(original);
 }
+
+/**
+ * 同源兜底地址：服务端会把「已经在对象存储里」的曲目 302 到 COS 预签名地址，
+ * 没缓存就 302 到它自己挑的健康 CDN 节点。浏览器只跟自己的域名打交道，
+ * 因此不受网易云节点风控、签名过期、Referer 策略影响。
+ */
+export function streamFallbackUrl(track: { id: string; source?: string } | null): string {
+  if (!track?.id) return '';
+  const source = track.source || 'wy';
+  return `/api/stream/${encodeURIComponent(track.id)}?source=${encodeURIComponent(source)}`;
+}

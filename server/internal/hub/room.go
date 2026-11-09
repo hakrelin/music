@@ -55,6 +55,8 @@ type Room struct {
 	volume    int
 
 	likes         map[string]int
+	likeVotes     map[string]map[string]struct{}
+	// likeVotes: trackID -> 点过赞的 session 集合，保证每人每首只能赞一次
 	removeVotes   map[string]map[string]struct{}
 	ownerPassword string
 	votes         map[string]struct{}
@@ -79,6 +81,7 @@ func newRoom(h *Hub, id, name, desc string) *Room {
 		desc:        desc,
 		clients:     make(map[*Client]struct{}),
 		likes:       make(map[string]int),
+		likeVotes:   make(map[string]map[string]struct{}),
 		votes:       make(map[string]struct{}),
 		removeVotes: make(map[string]map[string]struct{}),
 		blacklist:   make(map[string]bool),
@@ -402,6 +405,7 @@ func (r *Room) doStart() {
 		started := r.startedAt
 		r.mu.Unlock()
 		go r.loadLyrics(cand, started)
+		r.hub.notePlayed(cand)
 		return
 	}
 
@@ -459,6 +463,7 @@ func (r *Room) doAdvance(reason string) {
 			return
 		}
 		fromID := r.queue[0].QueueID
+		playedID := r.queue[0].ID
 		idx := 0
 		if len(r.queue) > 1 {
 			idx = r.nextIndexLocked()
@@ -467,6 +472,7 @@ func (r *Room) doAdvance(reason string) {
 			replay := r.loop || r.random || r.modeRadio || r.isRadio || reason == "manual" || reason == "vote"
 			if !replay {
 				// 普通房间自然播完：停止播放并清空队列。
+				r.resetLikesLocked(playedID)
 				r.queue = nil
 				r.startedAt = 0
 				r.lastTrackID = ""
@@ -511,6 +517,8 @@ func (r *Room) doAdvance(reason string) {
 			return
 		}
 		if err != nil {
+			// 解析失败被跳过：这首不会播，点赞一并清掉。
+			r.resetLikesLocked(cand.ID)
 			r.queue = append(r.queue[:idx], r.queue[idx+1:]...)
 			r.version++
 			r.mu.Unlock()
@@ -528,6 +536,8 @@ func (r *Room) doAdvance(reason string) {
 			newQueue = append(newQueue, t)
 		}
 		r.queue = newQueue
+		// 上一首播完了：点赞计数归零，下次再进队重新累计。
+		r.resetLikesLocked(playedID)
 		r.startedAt = r.hub.Now()
 		r.lastTrackID = cand.ID
 		r.votes = make(map[string]struct{})
@@ -537,6 +547,7 @@ func (r *Room) doAdvance(reason string) {
 		started := r.startedAt
 		r.mu.Unlock()
 		go r.loadLyrics(cand, started)
+		r.hub.notePlayed(cand)
 		r.hub.log.Info("切歌完成", "room", r.id, "track", cand.ID, "prepared", ready, "elapsedMs", time.Since(switchStarted).Milliseconds())
 		return
 	}
@@ -621,6 +632,7 @@ func (r *Room) refillRadio() {
 		return
 	}
 	r.queue = append(r.queue, picked...)
+	r.sortUpcomingLocked()
 	r.version++
 	r.broadcastQueueLocked()
 	r.mu.Unlock()
@@ -682,6 +694,7 @@ func (r *Room) pick(c *Client, t model.Track) (string, string) {
 	t.Likes = 0
 	t.URL = ""
 	r.queue = append(r.queue, t)
+	r.sortUpcomingLocked()
 	r.version++
 	r.broadcastQueueLocked()
 	needStart := r.startedAt == 0
@@ -720,7 +733,10 @@ func (r *Room) removeTrack(c *Client, id string) (string, string) {
 		return "forbidden", "只能删除自己点的歌"
 	}
 	removedCurrent := idx == 0
+	removedID := r.queue[idx].ID
 	r.queue = append(r.queue[:idx], r.queue[idx+1:]...)
+	// 被删掉的歌不再播，点赞清零（下次重新点进来从头累计）。
+	r.resetLikesLocked(removedID)
 	r.version++
 	if removedCurrent {
 		r.startedAt = 0
@@ -846,7 +862,7 @@ func (r *Room) voteSkip(c *Client) (string, string) {
 }
 
 // good 给当前队列里的某首点赞。
-func (r *Room) good(id string) (string, string) {
+func (r *Room) good(c *Client, id string) (string, string) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return "bad_request", "曲目 ID 不能为空"
@@ -855,6 +871,16 @@ func (r *Room) good(id string) (string, string) {
 	defer r.mu.Unlock()
 	if r.closed {
 		return "room_not_found", "房间不存在"
+	}
+	if r.likeVotes[id] == nil {
+		r.likeVotes[id] = make(map[string]struct{})
+	}
+	if _, dup := r.likeVotes[id][c.session]; dup {
+		return "already", "你已经点过赞了"
+	}
+	r.likeVotes[id][c.session] = struct{}{}
+	if len(r.likeVotes) > 4096 {
+		r.likeVotes = map[string]map[string]struct{}{id: {c.session: struct{}{}}}
 	}
 	found := false
 	for i := range r.queue {
@@ -868,8 +894,39 @@ func (r *Room) good(id string) (string, string) {
 	if !found {
 		return "not_found", "队列里没有这首"
 	}
+	// 点赞越多的越靠前（当前播放的这首不动）。
+	r.sortUpcomingLocked()
 	r.broadcastQueueLocked()
 	return "", ""
+}
+
+// sortUpcomingLocked 把「当前曲目之后」按点赞数从多到少稳定排序。
+//
+// 只排 queue[1:]：正在播放的那首永远留在 0 位，否则别人点个赞就会把
+// 正在听的歌换掉。稳定排序保证同赞数时维持原来的点歌顺序。
+func (r *Room) sortUpcomingLocked() {
+	if len(r.queue) < 3 {
+		return
+	}
+	tail := r.queue[1:]
+	sort.SliceStable(tail, func(i, j int) bool { return tail[i].Likes > tail[j].Likes })
+}
+
+// resetLikesLocked 清掉一首歌的点赞统计（含「谁赞过」的去重集合）。
+//
+// 语义：点赞只影响「这一次排队」的播放顺序。一首歌播完之后计数归零，
+// 下次再被点进来从头累计 —— 否则热门曲攒下的赞会让它永远插队。
+func (r *Room) resetLikesLocked(id string) {
+	if id == "" {
+		return
+	}
+	delete(r.likes, id)
+	delete(r.likeVotes, id)
+	for i := range r.queue {
+		if r.queue[i].ID == id {
+			r.queue[i].Likes = 0
+		}
+	}
 }
 
 // chat 发一条聊天消息。
@@ -1136,6 +1193,7 @@ func (r *Room) voteRemove(c *Client, entry string) (string, string) {
 	message := fmt.Sprintf("投票删除「%s」 %d/%d", r.queue[idx].Name, len(votes), need)
 	if len(votes) >= need {
 		message = "投票通过，已删除「" + r.queue[idx].Name + "」"
+		r.resetLikesLocked(r.queue[idx].ID)
 		r.queue = append(r.queue[:idx], r.queue[idx+1:]...)
 		r.version++
 		delete(r.removeVotes, entry)

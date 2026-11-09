@@ -7,6 +7,7 @@ import {
   preferredMediaUrl,
   rememberMediaSuccess,
   forgetMediaUrl,
+  streamFallbackUrl,
 } from '@/utils/media';
 
 let audio = new Audio();
@@ -222,7 +223,7 @@ export const usePlayerStore = defineStore('player', {
       const fallback = async () => {
         if (prepared !== candidate || next === audio || candidate.refreshing) return;
         window.clearTimeout(candidate.timer);
-        if (candidate.retries >= 2) return;
+        if (candidate.retries >= 3) return;
         candidate.retries++;
         let url = fallbackMediaUrl(next.src);
         if (!url && refreshMedia && track.queueId) {
@@ -236,6 +237,8 @@ export const usePlayerStore = defineStore('player', {
           }
           candidate.refreshing = false;
         }
+        // 预取也要有同源兜底，否则下一首开播时同样会卡在 403 节点上。
+        if (candidate.retries >= 2) url = streamFallbackUrl(track) || url;
         if (prepared !== candidate || next === audio || !url) return;
         next.src = url;
         next.load();
@@ -267,7 +270,7 @@ export const usePlayerStore = defineStore('player', {
         !audio.getAttribute('src')
       )
         return;
-      if (this._retries >= 2) {
+      if (this._retries >= 3) {
         this.failed = true;
         this.loading = false;
         return;
@@ -294,6 +297,12 @@ export const usePlayerStore = defineStore('player', {
           const oldUrl = audio.getAttribute('src') || '';
           let url = refreshed?.url || '';
           if (!url || url === oldUrl) url = fallbackMediaUrl(oldUrl) || url || oldUrl;
+          // 最后一招：走同源 /api/stream。命中对象存储就直连 COS，没命中由服务端
+          // 挑一个健康的 CDN 节点再 302，绕开节点 403 与签名过期。
+          if (attempt >= 2) {
+            const proxied = streamFallbackUrl(track);
+            if (proxied && proxied !== url) url = proxied;
+          }
           if (refreshed) sourceURL = refreshed.url;
           lastProgressAt = Date.now();
           lastProgressTime = 0;
@@ -474,7 +483,24 @@ export const usePlayerStore = defineStore('player', {
           if (audio.buffered.start(i) <= target && target < audio.buffered.end(i)) buffered = true;
         if (!buffered) return;
       }
-      if (force || target - audio.currentTime > 1.5) this.seekTo(target);
+      if (force) {
+        // 中途进房时会先按服务器时间轴跳到歌曲中段。部分网易云 CDN 对「非 0 起点的
+        // Range 请求」直接 416/断流，表现就是进房后一直 00:00 且提示无法播放。
+        // 所以强制模式也要先确认该位置真的可 seek，不可 seek 就从头播（先出声，再纠正）。
+        let seekable = false;
+        try {
+          for (let i = 0; i < audio.seekable.length; i++) {
+            if (audio.seekable.start(i) <= target && target <= audio.seekable.end(i)) {
+              seekable = true;
+              break;
+            }
+          }
+        } catch {
+          seekable = false;
+        }
+        if (!seekable) return;
+      }
+      if (target - audio.currentTime > 1.5) this.seekTo(target);
     },
     sync(offset: number) {
       this.offset = offset;

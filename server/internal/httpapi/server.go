@@ -7,6 +7,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -23,28 +24,33 @@ import (
 	"github.com/hakrelin/music/server/internal/model"
 	"github.com/hakrelin/music/server/internal/provider"
 	"github.com/hakrelin/music/server/internal/provider/demo"
+	"github.com/hakrelin/music/server/internal/storage"
 	"github.com/hakrelin/music/server/internal/webui"
 )
 
 // Server 聚合 HTTP 层所需的依赖。
 type Server struct {
-	cfg     config.Config
-	hub     *hub.Hub
-	reg     *provider.Registry
-	demo    *demo.Provider // 仅 demo provider 启用时非 nil
-	version string
-	log     *slog.Logger
-	static  fs.FS
+	cfg          config.Config
+	hub          *hub.Hub
+	reg          *provider.Registry
+	demo         *demo.Provider // 仅 demo provider 启用时非 nil
+	cache        *storage.Cache
+	cacheResolve storage.Resolver
+	version      string
+	log          *slog.Logger
+	static       fs.FS
 }
 
 // Options 构造 Server。
 type Options struct {
-	Config   config.Config
-	Hub      *hub.Hub
-	Registry *provider.Registry
-	Demo     *demo.Provider
-	Version  string
-	Logger   *slog.Logger
+	Config       config.Config
+	Hub          *hub.Hub
+	Registry     *provider.Registry
+	Demo         *demo.Provider
+	Cache        *storage.Cache
+	CacheResolve storage.Resolver
+	Version      string
+	Logger       *slog.Logger
 }
 
 // New 构造 HTTP 服务。
@@ -54,13 +60,15 @@ func New(opts Options) *Server {
 		logger = slog.Default()
 	}
 	return &Server{
-		cfg:     opts.Config,
-		hub:     opts.Hub,
-		reg:     opts.Registry,
-		demo:    opts.Demo,
-		version: opts.Version,
-		log:     logger,
-		static:  webui.FS(),
+		cfg:          opts.Config,
+		hub:          opts.Hub,
+		reg:          opts.Registry,
+		demo:         opts.Demo,
+		cache:        opts.Cache,
+		cacheResolve: opts.CacheResolve,
+		version:      opts.Version,
+		log:          logger,
+		static:       webui.FS(),
 	}
 }
 
@@ -74,6 +82,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/rooms", s.handleCreateRoom)
 	mux.HandleFunc("POST /api/rooms/{id}/auth", s.handleRoomAuth)
 	mux.HandleFunc("GET /api/ws", s.hub.ServeWS)
+
+	// 音频回退/缓存：命中对象存储就 302 过去，未命中先 302 到网易云并顺手预热。
+	mux.HandleFunc("GET /api/stream/{id}", s.handleStream)
+	mux.HandleFunc("HEAD /api/stream/{id}", s.handleStream)
+	mux.HandleFunc("GET /api/cache/stats", s.handleCacheStats)
 
 	// demo provider 的音频/封面：即使没注册 demo 也挂上路由，内部返回 404，
 	// 这样部署切到 wy 后旧的 demo 封面 URL 不会变成 HTML fallback。
@@ -240,6 +253,67 @@ func (s *Server) handleRoomAuth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAPINotFound(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "not_found", "接口不存在："+r.URL.Path)
+}
+
+// ---------- 音频回退 / 对象存储缓存 ----------
+
+// handleStream 是播放器的最后一道保险，也是缓存入口。
+//
+//   - 命中缓存：302 到对象存储的预签名地址（浏览器直连 COS，不吃服务器带宽）；
+//   - 未命中：现场解析地址，302 到网易云的健康节点，同时后台把这歌补进缓存，
+//     下次再放就直接走对象存储。
+//
+// 之所以用重定向而不是自己转发音频：3Mbps 出网带宽只够一两个人听，
+// 转发会立刻打满；重定向让流量完全落在网易云/COS 那边。
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	id = strings.TrimSuffix(id, ".mp3")
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+	if source == "" {
+		source = s.hub.PrimaryProvider()
+	}
+	if id == "" || len(id) > 64 || strings.ContainsAny(id, "/\\?#") {
+		writeError(w, http.StatusBadRequest, "bad_request", "曲目 ID 不合法")
+		return
+	}
+	// 302 的目标随时会变（预签名/签名都有有效期），禁止中间层缓存这次跳转。
+	w.Header().Set("Cache-Control", "no-store")
+
+	if s.cache != nil {
+		if u, ok := s.cache.Lookup(source, id); ok {
+			w.Header().Set("X-Cache", "hit")
+			http.Redirect(w, r, u, http.StatusFound)
+			return
+		}
+	}
+
+	p, ok := s.reg.For(source)
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown_source", "未知音乐源："+source)
+		return
+	}
+	t := model.Track{ID: id, Source: source}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := p.Resolve(ctx, &t); err != nil || strings.TrimSpace(t.URL) == "" {
+		s.log.Warn("stream 解析播放地址失败", "source", source, "track", id, "err", err)
+		writeError(w, http.StatusBadGateway, "upstream", "这首曲目暂时取不到音频")
+		return
+	}
+	if s.cache != nil && s.cacheResolve != nil {
+		s.cache.Ensure(source, id, s.cacheResolve)
+	}
+	w.Header().Set("X-Cache", "miss")
+	http.Redirect(w, r, t.URL, http.StatusFound)
+}
+
+// handleCacheStats 给排查/巡检用：缓存了多少首、两个账号各占多少。
+func (s *Server) handleCacheStats(w http.ResponseWriter, _ *http.Request) {
+	if s.cache == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.cache.Stats())
 }
 
 // decodeJSON 读取并解码 JSON body，限制 64KB 防止恶意大包。

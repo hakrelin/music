@@ -69,6 +69,9 @@ export const useRoomStore = defineStore('room', {
     chat: [] as ChatMsg[],
     mode: defaultMode(),
     votes: 0,
+    // 点赞按「这一次排队的条目」记（queueId），不是按曲目 ID：
+    // 同一首歌播完重新进队是新的一次，可以再次点赞。
+    likedIds: [] as string[],
     voteNeed: 0,
   }),
   getters: {
@@ -178,9 +181,9 @@ export const useRoomStore = defineStore('room', {
         }
         case 'queue': {
           this.queue = (msg.queue as Track[]) || [];
-          if (this.queue[0] && this.queue[0].id === this.current?.id) {
-            /* 队列刷新保留当前曲目对象 */
-          }
+          // likedIds 存的是 queueId：条目离开队列就摘掉，同一首歌再次进队时可以再赞。
+          const present = new Set(this.queue.map((t) => t.queueId).filter(Boolean) as string[]);
+          this.likedIds = this.likedIds.filter((id) => present.has(id));
           break;
         }
         case 'current': {
@@ -419,6 +422,25 @@ export const useRoomStore = defineStore('room', {
     },
     good(id: string) {
       this.socket?.send({ t: 'good', id });
+    },
+    /** 点赞：带反馈；entry 是队列条目 id（queueId），用于「这条已经赞过」的状态 */
+    async goodTrack(id: string, entry = ''): Promise<void> {
+      if (this.mock) return;
+      const inQueue = this.queue.find((t) => t.id === id);
+      const prev = Math.max(
+        this.current && this.current.id === id ? this.current.likes || 0 : 0,
+        inQueue ? inQueue.likes || 0 : 0,
+      );
+      await this.socket!.request({ t: 'good', id });
+      if (entry && !this.likedIds.includes(entry)) this.likedIds.push(entry);
+      // 服务端广播 queue 时会把队列里的 likes 更新掉，但「当前曲目」那份不会变；
+      // 这里用 max(现有值, 原值+1) 收口，既让当前曲目立刻 +1，也不会重复计数。
+      const want = prev + 1;
+      const apply = (t?: Track | null) => {
+        if (t && t.id === id) t.likes = Math.max(t.likes || 0, want);
+      };
+      apply(this.current);
+      apply(this.queue.find((t) => t.id === id));
     },
     blackSession(session: string) {
       this.socket?.send({ t: 'chat.black', session });

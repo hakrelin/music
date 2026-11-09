@@ -62,6 +62,9 @@ type Options struct {
 	RadioRooms      []config.RadioRoom
 	Logger          *slog.Logger
 	Now             func() time.Time // 测试注入；nil 用 time.Now
+	// OnTrackPlayed 是可选回调：某首曲子真的开始播放时触发，用来预热音频缓存。
+	// 必须是快速返回的实现（它会在自己的 goroutine 里跑）。
+	OnTrackPlayed func(model.Track)
 }
 
 // Hub 管理所有房间。
@@ -85,6 +88,8 @@ type Hub struct {
 	idleTimeout   time.Duration
 
 	radioRooms []config.RadioRoom
+
+	onPlayed func(model.Track)
 
 	closed bool
 }
@@ -121,6 +126,7 @@ func New(opts Options) *Hub {
 		voteRatio:     opts.VoteSkipRatio,
 		idleTimeout:   opts.IdleTimeout,
 		radioRooms:    append([]config.RadioRoom(nil), opts.RadioRooms...),
+		onPlayed:      opts.OnTrackPlayed,
 	}
 	h.presets = buildPresets(h.radioRooms, h.primary)
 	return h
@@ -170,6 +176,21 @@ func (h *Hub) PresetByID(id string) (Preset, bool) {
 
 // Now 返回服务器毫秒时间（协议里的 now/startedAt 都用它）。
 func (h *Hub) Now() int64 { return h.nowFn().UnixMilli() }
+
+// notePlayed 在曲目真正开始播放时通知外部（缓存预热），不阻塞房间状态机。
+func (h *Hub) notePlayed(t model.Track) {
+	if h.onPlayed == nil {
+		return
+	}
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				h.log.Warn("播放回调异常", "track", t.ID, "panic", rec)
+			}
+		}()
+		h.onPlayed(t)
+	}()
+}
 
 // Run 启动房间主循环：每 500ms 检查一次"该切歌了吗 / 电台该补歌了吗"，
 // 并定期回收空置普通房间。退出由 ctx 取消。

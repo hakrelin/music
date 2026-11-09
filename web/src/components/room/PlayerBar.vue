@@ -3,9 +3,24 @@ import { computed } from 'vue';
 import Icon from '@/components/Icon.vue';
 import { useRoomStore } from '@/stores/room';
 import { usePlayerStore } from '@/stores/player';
+import { useUiStore } from '@/stores/ui';
 import { formatTime } from '@/utils/lyric';
 const room = useRoomStore();
 const player = usePlayerStore();
+const ui = useUiStore();
+const liked = computed(
+  () => !!room.current && room.likedIds.includes(room.current.queueId || ''),
+);
+async function like() {
+  const cur = room.current;
+  if (!cur) return;
+  try {
+    await room.goodTrack(cur.id, cur.queueId);
+    ui.ok('已点赞');
+  } catch (e) {
+    ui.warn(e instanceof Error ? e.message : '点赞失败');
+  }
+}
 const duration = computed(() => player.duration || room.current?.duration || 0);
 const progress = computed(() =>
   duration.value ? Math.min(100, (player.time / duration.value) * 100) : 0,
@@ -27,12 +42,13 @@ const progress = computed(() =>
         ><span>{{ room.current?.artist || '点一首喜欢的歌吧' }}</span>
       </div>
       <button
-        class="icon-btn like"
-        :disabled="!room.current"
+        v-if="room.mode.goodMode"
+        class="icon-btn like" :class="{ liked }"
+        :disabled="!room.current || liked"
         aria-label="点赞当前歌曲"
-        @click="room.current && room.good(room.current.id)"
+        @click="like()"
       >
-        <Icon name="heart" :size="18" /><span>{{ room.current?.likes || '' }}</span>
+        <Icon name="heart" :size="18" /><span>{{ room.current?.likes || 0 }}</span>
       </button>
     </div>
     <div class="playback">
@@ -159,6 +175,10 @@ const progress = computed(() =>
 .like span {
   font-size: 12px;
 }
+.like.liked {
+  opacity: 0.55;
+  cursor: default;
+}
 .playback-buttons {
   display: flex;
   align-items: center;
@@ -253,8 +273,17 @@ const progress = computed(() =>
   .volume-controls > span {
     display: none;
   }
+  /* 窄屏不要隐藏点赞按钮和数字：原来这里 display:none，
+     导致 1100px 以下窗口的普通听众完全看不到点赞 */
   .like {
-    display: none;
+    margin-left: 4px;
+    padding: 0 6px;
+    min-width: 34px;
+    justify-content: center;
+  }
+  .like span {
+    font-size: 11px;
+    display: inline;
   }
 }
 @media (max-width: 900px) {

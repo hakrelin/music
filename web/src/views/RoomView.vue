@@ -14,11 +14,14 @@ import { useRoomStore } from '@/stores/room';
 import { usePlayerStore } from '@/stores/player';
 import { useRoomsStore } from '@/stores/rooms';
 import { useUiStore } from '@/stores/ui';
+import { icpForHost } from '@/utils/site';
 const route = useRoute();
 const room = useRoomStore();
 const player = usePlayerStore();
 const rooms = useRoomsStore();
 const ui = useUiStore();
+// 备案号跟着访问的域名走（茶与金平糖 -2 / tea-sugar -1），见 utils/site.ts
+const icp = icpForHost();
 const settingsOpen = ref(false);
 const searchOpen = ref(false);
 const mobileTab = ref('play');
@@ -157,6 +160,13 @@ watch(
       </div>
       <div class="room-bottom">
         <span><span class="mini-star">✦</span> TEA &amp; KOMPEITO</span
+        ><a
+          v-if="icp"
+          class="beian"
+          :href="icp.href"
+          target="_blank"
+          rel="noreferrer noopener"
+          >{{ icp.text }}</a
         ><span>听歌的时候，也可以聊聊天。</span
         ><button @click="searchOpen = true"><Icon name="plus" :size="12" />点一首歌</button>
       </div>
@@ -340,6 +350,17 @@ watch(
   color: #776638;
   font-size: 14px;
   margin-right: 6px;
+}
+/* 备案号：房间页底部也要有（法规要求每个页面可见） */
+.beian {
+  font-size: 10px;
+  color: #676c60;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.beian:hover {
+  color: var(--green);
+  text-decoration: underline;
 }
 .room-bottom button {
   display: flex;

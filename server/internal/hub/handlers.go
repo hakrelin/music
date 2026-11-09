@@ -115,7 +115,7 @@ func (c *Client) handle(m *inMsg) {
 		c.reply(code, msg, m.Req)
 
 	case "good":
-		code, msg := c.room.good(m.ID)
+		code, msg := c.room.good(c, m.ID)
 		c.reply(code, msg, m.Req)
 
 	case "chat.black":

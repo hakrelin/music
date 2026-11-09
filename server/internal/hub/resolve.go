@@ -126,8 +126,10 @@ func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string
 			var err error
 			if !ok {
 				err = fmt.Errorf("未知音乐源 %q", cp.Source)
-			} else if fresh, ok := p.(provider.RefreshProvider); ok && lower {
-				err = fresh.ResolveFresh(callCtx, &cp, true)
+			} else if fresh, ok := p.(provider.RefreshProvider); ok {
+				// 一律走 ResolveFresh：客户端报错刷新时即使 lower=false 也必须重新
+				// 签名（走缓存会拿到同一个已 403 的地址）。lower 决定要不要降到 128k。
+				err = fresh.ResolveFresh(callCtx, &cp, lower)
 			} else {
 				err = p.Resolve(callCtx, &cp)
 			}

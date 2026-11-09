@@ -445,27 +445,48 @@ func (p *Provider) ResolveFresh(ctx context.Context, t *model.Track, lower bool)
 	return err
 }
 
-// songURL 请求单曲的播放地址；返回的 URL 已强制成 https（网易云有时给 http）。
+// songURL 请求单曲的播放地址；返回的 URL 已强制成 https（网易云有时给 http），
+// 并且保证指向一个真的能拉到数据的 CDN 节点（见 cdn.go）。
+//
+// 为什么要重试整个请求：网易云每次返回的主机是随机分配的，一轮探测下来所有
+// 候选都不通时，重新要一次签名往往就落到健康节点上了。
 func (p *Provider) songURL(ctx context.Context, songID int64, br int) (string, int, error) {
 	// ids 字段是「JSON 数组字符串」而不是数组本身，网页端就是这么传的。
 	payload := map[string]any{
 		"ids": fmt.Sprintf("[%d]", songID),
 		"br":  br,
 	}
-	var resp struct {
-		Data []struct {
-			URL  string `json:"url"`
-			Br   int    `json:"br"`
-			Code int    `json:"code"`
-		} `json:"data"`
+	var fallback string
+	var fallbackBr int
+	for attempt := 0; attempt < 3; attempt++ {
+		var resp struct {
+			Data []struct {
+				URL  string `json:"url"`
+				Br   int    `json:"br"`
+				Code int    `json:"code"`
+			} `json:"data"`
+		}
+		if err := p.weapi(ctx, "song/enhance/player/url", payload, &resp); err != nil {
+			return "", 0, fmt.Errorf("请求播放地址失败: %w", err)
+		}
+		if len(resp.Data) == 0 {
+			return "", 0, nil
+		}
+		raw := forceHTTPS(resp.Data[0].URL)
+		if raw == "" {
+			return "", 0, nil
+		}
+		if fallback == "" {
+			fallback, fallbackBr = raw, resp.Data[0].Br
+		}
+		if settled, ok := settleCDN(ctx, raw); ok {
+			return settled, resp.Data[0].Br, nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
 	}
-	if err := p.weapi(ctx, "song/enhance/player/url", payload, &resp); err != nil {
-		return "", 0, fmt.Errorf("请求播放地址失败: %w", err)
-	}
-	if len(resp.Data) == 0 {
-		return "", 0, nil
-	}
-	return forceHTTPS(resp.Data[0].URL), resp.Data[0].Br, nil
+	return fallback, fallbackBr, nil
 }
 
 // Lyric 取 LRC 歌词原文；没有歌词时返回空串而不是错误。

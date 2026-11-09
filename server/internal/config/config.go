@@ -46,8 +46,36 @@ type Config struct {
 	RoomIdleMinutes int         `json:"roomIdleMinutes"` // <=0 表示不回收
 	VoteSkipRatio   float64     `json:"voteSkipRatio"`   // (0,1]
 	LogLevel        string      `json:"logLevel"`
-	DataDir         string      `json:"dataDir"` // 预留：持久化目录，v1 暂不写入
+	DataDir         string      `json:"dataDir"` // 持久化目录（缓存索引也放这里）
+	Storage         ObjectStorage `json:"storage"`
 }
+
+// StorageAccount 是对象存储的一个账号。
+//
+// 目前接的是多吉云（底层腾讯 COS）：上传/删除走多吉云服务端 API，
+// 播放走 302 预签名地址，浏览器直连 COS，不吃服务器出网带宽。
+type StorageAccount struct {
+	Label     string `json:"label"`
+	AccessKey string `json:"accessKey"`
+	SecretKey string `json:"secretKey"`
+	Bucket    string `json:"bucket"`
+	// PublicBase 是这个桶绑定的加速域名（如 https://audio.tea-kompeito.com）。
+	//
+	// 基础型存储空间不支持 S3 临时密钥（没法签预签名 URL），只能靠绑定的
+	// CDN 域名对外提供文件；配了它就用 "域名 + key" 直接播放，没配就退回
+	// 标准型的预签名方式。
+	PublicBase string `json:"publicBase"`
+}
+
+// ObjectStorage 是音频缓存配置。accounts 为空时整个功能关闭。
+type ObjectStorage struct {
+	Enabled         bool             `json:"enabled"`
+	Accounts        []StorageAccount `json:"accounts"`
+	MaxMBPerAccount int              `json:"maxMBPerAccount"` // 0 = 不限容量
+	EvictAfterDays  int              `json:"evictAfterDays"`  // 0 = 不按时间淘汰
+	MinHits         int              `json:"minHits"`         // 时间淘汰时的保护阈值
+}
+
 
 // Default 返回内置默认配置（与 config.example.json 保持一致）。
 func Default() Config {
@@ -230,6 +258,31 @@ func (c *Config) Normalize() {
 	}
 	if c.DataDir != "" {
 		c.DataDir = filepath.Clean(c.DataDir)
+	}
+	// 对象存储：没配账号就整体关闭，避免半开状态下每次播放都白跑一次。
+	accs := make([]StorageAccount, 0, len(c.Storage.Accounts))
+	for _, a := range c.Storage.Accounts {
+		a.AccessKey = strings.TrimSpace(a.AccessKey)
+		a.SecretKey = strings.TrimSpace(a.SecretKey)
+		a.Bucket = strings.TrimSpace(a.Bucket)
+		a.Label = strings.TrimSpace(a.Label)
+		if a.AccessKey == "" || a.SecretKey == "" || a.Bucket == "" {
+			continue
+		}
+		accs = append(accs, a)
+	}
+	c.Storage.Accounts = accs
+	if len(accs) == 0 {
+		c.Storage.Enabled = false
+	}
+	if c.Storage.MaxMBPerAccount < 0 {
+		c.Storage.MaxMBPerAccount = 0
+	}
+	if c.Storage.EvictAfterDays < 0 {
+		c.Storage.EvictAfterDays = 0
+	}
+	if c.Storage.MinHits < 0 {
+		c.Storage.MinHits = 0
 	}
 	// 电台房：丢掉没名字的条目，并保证 playlists 是独立切片。
 	rooms := make([]RadioRoom, 0, len(c.RadioRooms))

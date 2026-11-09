@@ -1,8 +1,20 @@
+<script setup lang="ts">
+import { icpForHost } from '@/utils/site';
+// 同一个站挂在不同域名上，备案号跟着域名走（tea-kompeito.com → -2，tea-sugar.xyz → -1）
+const icp = icpForHost();
+</script>
 <template>
   <footer>
     <span>茶与金平糖汉化组 <span class="sep">·</span> 一起听歌的小地方</span
     ><span
       ><a href="https://tea-kompeito.com" target="_blank" rel="noreferrer">TEA &amp; KOMPEITO ↗</a
+      ><a
+        v-if="icp"
+        class="beian"
+        :href="icp.href"
+        target="_blank"
+        rel="noreferrer noopener"
+        >{{ icp.text }}</a
       ><slot
     /></span>
   </footer>
@@ -31,6 +43,17 @@ footer > span:last-child {
 a {
   font-size: 9px;
   letter-spacing: 1px;
+}
+/* 备案号：法规要求站内每个页面底部可见，字号跟 muted 一致即可 */
+.beian {
+  font-size: 10px;
+  letter-spacing: 0;
+  color: var(--muted);
+  text-decoration: none;
+}
+.beian:hover {
+  color: var(--green);
+  text-decoration: underline;
 }
 @media (max-width: 600px) {
   footer {

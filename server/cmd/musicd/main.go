@@ -23,9 +23,11 @@ import (
 	"github.com/hakrelin/music/server/internal/config"
 	"github.com/hakrelin/music/server/internal/httpapi"
 	"github.com/hakrelin/music/server/internal/hub"
+	"github.com/hakrelin/music/server/internal/model"
 	"github.com/hakrelin/music/server/internal/provider"
 	"github.com/hakrelin/music/server/internal/provider/demo"
 	"github.com/hakrelin/music/server/internal/provider/netease"
+	"github.com/hakrelin/music/server/internal/storage"
 )
 
 // version 可通过构建参数覆盖：-ldflags "-X main.version=1.2.3"。
@@ -67,8 +69,15 @@ func run() error {
 	}
 	logger.Info("provider 就绪", "primary", primary, "sources", reg.Names())
 
+	// 1.5) 音频缓存：多吉云对象存储。听过的歌落桶，下次播放 302 过去直连 COS。
+	cache, cacheResolve := buildCache(cfg, reg, logger)
+
 	// 2) 房间 hub
 	idle := time.Duration(cfg.RoomIdleMinutes) * time.Minute
+	var onPlayed func(model.Track)
+	if cache.Enabled() {
+		onPlayed = func(t model.Track) { cache.Ensure(t.Source, t.ID, cacheResolve) }
+	}
 	h := hub.New(hub.Options{
 		Version:         version,
 		Registry:        reg,
@@ -79,21 +88,25 @@ func run() error {
 		IdleTimeout:     idle,
 		RadioRooms:      cfg.RadioRooms,
 		Logger:          logger,
+		OnTrackPlayed:   onPlayed,
 	})
 	h.StartBuiltinRooms()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go h.Run(ctx)
+	cache.Run(ctx)
 
 	// 3) HTTP
 	api := httpapi.New(httpapi.Options{
-		Config:   cfg,
-		Hub:      h,
-		Registry: reg,
-		Demo:     demoProvider,
-		Version:  version,
-		Logger:   logger,
+		Config:       cfg,
+		Hub:          h,
+		Registry:     reg,
+		Demo:         demoProvider,
+		Cache:        cache,
+		CacheResolve: cacheResolve,
+		Version:      version,
+		Logger:       logger,
 	})
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
@@ -128,6 +141,52 @@ func run() error {
 	}
 	logger.Info("musicd 已退出")
 	return nil
+}
+
+// buildCache 构造音频缓存与「解析 128k 地址」回调。
+//
+// 为什么缓存用 128k：多吉云「简单上传」接口上限 10MB，320k 的 5 分钟歌就有
+// 18MB 压不进去；128k 一般 4~7MB，能稳定落桶。直连播放仍然是 320k。
+func buildCache(cfg config.Config, reg *provider.Registry, logger *slog.Logger) (*storage.Cache, storage.Resolver) {
+	resolve := func(ctx context.Context, source, id string) (string, error) {
+		p, ok := reg.For(source)
+		if !ok {
+			return "", fmt.Errorf("未知音乐源 %q", source)
+		}
+		t := model.Track{ID: id, Source: source}
+		if rp, ok := p.(provider.RefreshProvider); ok {
+			if err := rp.ResolveFresh(ctx, &t, true); err != nil {
+				return "", err
+			}
+		} else if err := p.Resolve(ctx, &t); err != nil {
+			return "", err
+		}
+		return t.URL, nil
+	}
+	if !cfg.Storage.Enabled {
+		return nil, resolve
+	}
+	accs := make([]storage.Account, 0, len(cfg.Storage.Accounts))
+	for _, a := range cfg.Storage.Accounts {
+		accs = append(accs, storage.Account{Label: a.Label, AK: a.AccessKey, SK: a.SecretKey,
+			Bucket: a.Bucket, Base: a.PublicBase})
+	}
+	cache := storage.New(storage.Options{
+		Accounts:           accs,
+		DataDir:            cfg.DataDir,
+		MaxBytesPerAccount: int64(cfg.Storage.MaxMBPerAccount) << 20,
+		EvictAfterDays:     cfg.Storage.EvictAfterDays,
+		MinHits:            cfg.Storage.MinHits,
+		Download:           netease.DownloadAudio,
+		Logger:             logger,
+	})
+	if cache.Enabled() {
+		logger.Info("音频缓存已启用", "buckets", len(accs), "dataDir", cfg.DataDir,
+			"maxMBPerAccount", cfg.Storage.MaxMBPerAccount, "evictAfterDays", cfg.Storage.EvictAfterDays)
+	} else {
+		logger.Warn("音频缓存未启用（没有有效的存储账号）")
+	}
+	return cache, resolve
 }
 
 // newLogger 按配置的 logLevel 构造 slog logger。

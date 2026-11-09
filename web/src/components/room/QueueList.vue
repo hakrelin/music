@@ -1,9 +1,20 @@
 <script setup lang="ts">
 import Icon from '@/components/Icon.vue';
 import { useRoomStore } from '@/stores/room';
+import { useUiStore } from '@/stores/ui';
 import { formatTime } from '@/utils/lyric';
 const room = useRoomStore();
+const ui = useUiStore();
 defineEmits<{ search: [] }>();
+const liked = (entry?: string) => !!entry && room.likedIds.includes(entry);
+async function like(id: string, entry?: string) {
+  try {
+    await room.goodTrack(id, entry);
+    ui.ok('已点赞');
+  } catch (e) {
+    ui.warn(e instanceof Error ? e.message : '点赞失败');
+  }
+}
 </script>
 <template>
   <section class="queue-panel" aria-label="点歌队列">
@@ -43,6 +54,18 @@ defineEmits<{ search: [] }>();
                 <Icon name="close" :size="13" />
               </button>
             </div>
+            <!-- 点赞：只在「点赞模式」开启时出现（房主在设置里开），普通听众默认看不到 -->
+            <button
+              v-if="room.mode.goodMode"
+              class="like-row"
+              :class="{ liked: liked(t.queueId) }"
+              :disabled="liked(t.queueId)"
+              :aria-label="liked(t.queueId) ? '已经点过赞了' : '给这首点赞'"
+              :title="liked(t.queueId) ? '已经点过赞了' : '给这首点赞'"
+              @click.stop="like(t.id, t.queueId)"
+            >
+              <Icon name="heart" :size="12" /><span>{{ t.likes || 0 }}</span>
+            </button>
             <button
               v-if="i > 0 && t.queueId"
               class="vote-remove"
@@ -184,6 +207,28 @@ header {
   font-size: 11px;
   color: var(--green);
   padding: 4px;
+}
+
+/* 点赞：所有听众可见，点过后置灰 */
+.like-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--vermilion);
+  padding: 3px 5px;
+  border-radius: 6px;
+  line-height: 1;
+}
+.like-row:hover {
+  background: #fbeee9;
+}
+.like-row.liked {
+  opacity: 0.5;
+  cursor: default;
+}
+.like-row:disabled {
+  color: #b8837a;
 }
 .track-actions {
   display: flex;

@@ -84,6 +84,7 @@ async function openUser(u: MusicUser) {
   selectedUser.value = u;
   try {
     plList.value = await room.userPlaylists(u.id);
+    plPage.value = 1;
   } catch (e) {
     ui.error(e instanceof Error ? e.message : '用户歌单加载失败');
   } finally {
@@ -104,9 +105,56 @@ async function userTurn(delta: number) {
   await searchPlaylists(false);
 }
 const plList = ref<Playlist[]>([]);
+// 歌单列表分页：用户歌单可能有上百个，一次只渲染 10 个
+const PL_PAGE = 30;
+const plPage = ref(1);
+const plPages = computed(() => Math.max(1, Math.ceil(plList.value.length / PL_PAGE)));
+const plPaged = computed(() =>
+  plList.value.slice((plPage.value - 1) * PL_PAGE, plPage.value * PL_PAGE),
+);
+function plTurn(delta: number) {
+  plPage.value = Math.min(plPages.value, Math.max(1, plPage.value + delta));
+}
+// 页码输入框：回车或点「跳转」直达该页
+const plJump = ref('');
+async function plSearchTurn(delta: number) {
+  const next = Math.min(plSearchPages.value, Math.max(1, plSearchPage.value + delta));
+  if (next === plSearchPage.value) return;
+  plSearchPage.value = next;
+  await searchPlaylists(false);
+}
+function plGoto() {
+  const n = Math.floor(Number(plJump.value));
+  if (!Number.isFinite(n) || n < 1) {
+    plJump.value = '';
+    return;
+  }
+  plPage.value = Math.min(plPages.value, n);
+  plJump.value = '';
+}
 const plSearched = ref(false);
 const current = ref<Playlist | null>(null);
 const currentTracks = ref<Track[]>([]);
+// 歌单曲目分页：1398 首的东方歌单也能翻完
+const TRACK_PAGE = 50;     // 歌单曲目每页 50 首
+const trackPage = ref(1);
+// 关键词搜歌单走服务端分页
+const plSearchPage = ref(1);
+const plSearchTotal = ref(0);
+const plSearchPages = computed(() => Math.max(1, Math.ceil(plSearchTotal.value / PL_PAGE)));
+const trackPages = computed(() => Math.max(1, Math.ceil(currentTracks.value.length / TRACK_PAGE)));
+const trackPaged = computed(() =>
+  currentTracks.value.slice((trackPage.value - 1) * TRACK_PAGE, trackPage.value * TRACK_PAGE),
+);
+function trackTurn(delta: number) {
+  trackPage.value = Math.min(trackPages.value, Math.max(1, trackPage.value + delta));
+}const trackJump = ref('');
+function trackGoto() {
+  const n = Math.floor(Number(trackJump.value));
+  if (!Number.isFinite(n) || n < 1) { trackJump.value = ''; return; }
+  trackPage.value = Math.min(trackPages.value, n);
+  trackJump.value = '';
+}
 const loadingTracks = ref(false);
 const picked = ref<Set<string>>(new Set());
 
@@ -133,8 +181,10 @@ async function searchPlaylists(reset = true) {
       current.value = one.playlist;
       currentTracks.value = one.tracks;
     } else {
-      const res = await room.searchPlaylists(q, 1, 10);
+      const res = await room.searchPlaylists(q, plSearchPage.value, PL_PAGE);
       plList.value = res.playlists;
+      plSearchTotal.value = res.total || res.playlists.length;
+      plPage.value = 1;
       plSearched.value = true;
     }
   } catch (e) {
@@ -151,7 +201,8 @@ async function openPlaylist(p: Playlist) {
   try {
     const one = await room.getPlaylist(p.id);
     current.value = one.playlist;
-    currentTracks.value = one.tracks.slice(0, 60);
+    currentTracks.value = one.tracks;
+    trackPage.value = 1;
   } catch (e) {
     ui.error(e instanceof Error ? e.message : '歌单曲目加载失败');
   } finally {
@@ -357,7 +408,7 @@ function loadRadio(id: string) {
       </p>
       <!-- 歌单列表 -->
       <ul v-if="!current && plList.length" class="playlists">
-        <li v-for="p in plList" :key="p.id" class="pl" @click="openPlaylist(p)">
+        <li v-for="p in plPaged" :key="p.id" class="pl" @click="openPlaylist(p)">
           <img v-if="p.cover" :src="p.cover" :alt="p.name" loading="lazy" />
           <div class="pl-main">
             <span class="pl-name">{{ p.name }}</span>
@@ -373,7 +424,7 @@ function loadRadio(id: string) {
           <button class="back" type="button" @click="current = null">← 返回</button>
           <div class="pl-title">
             <b>{{ current.name }}</b>
-            <small>{{ current.creator }} · 共 {{ current.count }} 首，这里显示前 60 首</small>
+            <small>{{ current.creator }} · 共 {{ current.count }} 首，显示 {{ currentTracks.length }} 首</small>
           </div>
           <button
             class="add-all"
@@ -386,7 +437,7 @@ function loadRadio(id: string) {
         </div>
         <p v-if="loadingTracks" class="state">正在取曲目…</p>
         <ul v-else class="tracks">
-          <li v-for="t in currentTracks" :key="t.id" class="track">
+          <li v-for="t in trackPaged" :key="t.id" class="track">
             <div class="t-main">
               <span class="t-name">{{ t.name }}</span>
               <span class="t-sub">{{ t.artist }}</span>
@@ -401,8 +452,49 @@ function loadRadio(id: string) {
             </button>
           </li>
         </ul>
+        <ul v-if="trackPages > 1" class="pager pl-pager">
+          <li>
+            <button type="button" :disabled="trackPage <= 1" @click="trackTurn(-1)">上一页</button>
+            <span>{{ trackPage }} / {{ trackPages }}（共 {{ currentTracks.length }} 首）</span>
+            <button type="button" :disabled="trackPage >= trackPages" @click="trackTurn(1)">下一页</button>            <input
+              v-model="trackJump"
+              class="pl-jump"
+              type="number"
+              min="1"
+              :max="trackPages"
+              placeholder="页码"
+              @keydown.enter.prevent="trackGoto()"
+            />
+            <button type="button" @click="trackGoto()">跳转</button>
+
+          </li>
+        </ul>
       </template>
 
+      <ul v-if="!current && plList.length > PL_PAGE" class="pager pl-pager">
+        <li>
+          <button type="button" :disabled="plPage <= 1" @click="plTurn(-1)">上一页</button>
+          <span>{{ plPage }} / {{ plPages }}（共 {{ plList.length }} 个歌单）</span>
+          <button type="button" :disabled="plPage >= plPages" @click="plTurn(1)">下一页</button>
+          <input
+            v-model="plJump"
+            class="pl-jump"
+            type="number"
+            min="1"
+            :max="plPages"
+            placeholder="页码"
+            @keydown.enter.prevent="plGoto()"
+          />
+          <button type="button" @click="plGoto()">跳转</button>
+        </li>
+      </ul>
+      <ul v-if="!current && plMode !== 'user' && plList.length && plSearchPages > 1" class="pager pl-pager">
+        <li>
+          <button type="button" :disabled="plSearchPage <= 1" @click="plSearchTurn(-1)">上一页</button>
+          <span>{{ plSearchPage }} / {{ plSearchPages }}（共约 {{ plSearchTotal }} 个歌单）</span>
+          <button type="button" :disabled="plSearchPage >= plSearchPages" @click="plSearchTurn(1)">下一页</button>
+        </li>
+      </ul>
       <p v-if="!plLoading && !current && !plList.length && !plSearched" class="state">
         也可以切到「东方电台」，一键把整套东方歌单装进房间。
       </p>
