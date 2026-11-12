@@ -3,7 +3,8 @@
  *   ① 昵称：全局自动（首次生成、自动上报、顶栏可改）
  *   ② 导入歌单：用户昵称/ID → 该用户的歌单 → 一键按歌单播放
  *   ③ 电台：循环 + 随机，队列空了也一直放；内置东方电台歌单
- *   ④ 快捷键：空格 / → 切歌，R 重载当前
+ *      + 播放模式开关：列表循环 / 随机 / 单曲循环，可逐项开或关，也可一键全关
+ *   ④ 快捷键：→ 投票切歌，R 重载当前；空格恢复为原生播放/暂停（不再切歌）
  *   ⑤ 播放自愈：http 音源升 https、出错重试、卡住自动切歌
  */
 (function () {
@@ -122,6 +123,17 @@
       + '        <button class="jp-b p" id="jp-apply">加入队列</button></div>'
       + '    </div>'
       + '    <div class="jp-sec">'
+      + '      <label class="jp-lb">播放模式（点一下切换；关闭循环就是这里，需要房主或管理员权限）</label>'
+      + '      <div class="jp-row">'
+      + '        <button class="jp-b" id="jp-mode-list">列表循环：关</button>'
+      + '        <button class="jp-b" id="jp-mode-rand">随机播放：关</button>'
+      + '        <button class="jp-b" id="jp-mode-one">单曲循环：关</button>'
+      + '      </div>'
+      + '      <div class="jp-row" style="margin-top:8px">'
+      + '        <button class="jp-b p" id="jp-mode-off">全部关闭（循环 / 随机 / 单曲）</button>'
+      + '      </div>'
+      + '    </div>'
+      + '    <div class="jp-sec">'
       + '      <label class="jp-lb">电台 / 队列</label>'
       + '      <div class="jp-row">'
       + '        <button class="jp-b p" id="jp-touhou">东方歌单加进队列</button>'
@@ -183,6 +195,42 @@
       say('当前队列 ' + pick.length + ' 首（后端上限 ' + QUEUE_MAX + '）');
     };
     document.getElementById('jp-clear').onclick = clearQueue;
+
+    /* ---- 播放模式：列表循环 / 随机 / 单曲循环 ---- */
+    var modeState = { list: false, rand: false, one: false };
+    function paintMode() {
+      var map = [['jp-mode-list', '列表循环', modeState.list], ['jp-mode-rand', '随机播放', modeState.rand], ['jp-mode-one', '单曲循环', modeState.one]];
+      map.forEach(function (it) {
+        var el = document.getElementById(it[0]);
+        if (!el) return;
+        el.textContent = it[1] + '：' + (it[2] ? '开' : '关');
+        if (it[2]) el.classList.add('p'); else el.classList.remove('p');
+      });
+    }
+    function flipMode(key, dest, label) {
+      modeState[key] = !modeState[key];
+      send(dest + '/' + modeState[key]);
+      say('已发送：' + label + (modeState[key] ? ' 开' : ' 关') + '（后端回执会出现在聊天区）');
+      paintMode();
+    }
+    document.getElementById('jp-mode-list').onclick = function () {
+      flipMode('list', '/music/musiclistmodel', '列表循环');
+    };
+    document.getElementById('jp-mode-rand').onclick = function () {
+      flipMode('rand', '/music/randommodel', '随机播放');
+    };
+    document.getElementById('jp-mode-one').onclick = function () {
+      flipMode('one', '/music/musiccirclemodel', '单曲循环');
+    };
+    document.getElementById('jp-mode-off').onclick = function () {
+      modeState.list = modeState.rand = modeState.one = false;
+      send('/music/musiclistmodel/false');
+      send('/music/randommodel/false');
+      send('/music/musiccirclemodel/false');
+      say('已发送：关闭列表循环 / 随机播放 / 单曲循环');
+      paintMode();
+    };
+    paintMode();
     keyword.addEventListener('keyup', function (e) { if (e.key === 'Enter') findUser(); });
   }
 
@@ -439,7 +487,8 @@
     var m = get('getPlayerMusic') || {};
     var url = httpsify(m.url);
     if (!url) return;
-    if (retried >= 2) { send('/music/skip/vote'); retried = 0; return; }
+    // 只重试，不再自动投票切歌：卡顿不等于要换歌，自动切歌会打断正在听的人
+    if (retried >= 3) { console.warn('[jusic-plus] 重试 3 次仍失败，等待手动切歌：' + reason); return; }
     retried++;
     if (!audio) return;
     audio.src = url + (url.indexOf('?') > -1 ? '&' : '?') + '_r=' + Date.now();
@@ -479,10 +528,14 @@
   document.addEventListener('keydown', function (e) {
     var t = (e.target && e.target.tagName) || '';
     if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
-    if (e.code === 'Space' || e.key === 'ArrowRight') {
+    if (e.code === 'Space') {
+      // 空格 = 播放/暂停（原生行为），不再发投票切歌 —— 以前按空格会直接切歌
       e.preventDefault();
-      send('/music/skip/vote');
+      if (audio && audio.src) {
+        if (audio.paused) { audio.play().catch(function () {}); } else { audio.pause(); }
+      }
     } else if (e.key === 'r' || e.key === 'R') {
+      // 注意：切歌快捷键（空格 / →）已全部移除，避免误触自动切歌；需要切歌请点界面上的按钮
       e.preventDefault();
       var m = get('getPlayerMusic') || {};
       if (m && m.id) {
