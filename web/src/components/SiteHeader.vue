@@ -20,7 +20,7 @@ function save() {
 }
 </script>
 <template>
-  <header class="site-header">
+  <header class="site-header" :class="{ compact }">
     <RouterLink to="/" class="brand" aria-label="茶与金平糖 · 听歌大厅"
       ><BrandMark /><span
         ><b>茶与金平糖<span class="brand-dot">.</span></b
@@ -153,6 +153,22 @@ nav a span {
 .nickname-form .btn {
   justify-self: end;
 }
+.site-header.compact {
+  height: 56px;
+  width: 100%;
+  max-width: 1600px;
+  padding: 0 24px;
+}
+.compact .brand b {
+  font-size: 17px;
+}
+.compact .brand small {
+  display: none;
+}
+.compact .brand :deep(svg) {
+  width: 30px;
+  height: 30px;
+}
 @media (max-width: 900px) {
   .site-header {
     padding: 0 24px;
@@ -163,6 +179,10 @@ nav a span {
   }
 }
 @media (max-width: 600px) {
+  .site-header.compact {
+    height: 48px;
+    padding: 0 12px;
+  }
   .site-header {
     height: 74px;
     padding: 0 18px;

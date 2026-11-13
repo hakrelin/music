@@ -29,7 +29,7 @@ const progress = computed(() =>
 <template>
   <footer class="player-bar" aria-label="播放控制">
     <div class="bar-track">
-      <div class="bar-cover">
+      <div v-if="ui.coverVisible" class="bar-cover">
         <img
           v-if="room.current?.cover"
           :src="room.current.cover"
@@ -37,7 +37,7 @@ const progress = computed(() =>
           @error="($event.target as HTMLImageElement).style.display = 'none'"
         /><Icon v-else name="music" :size="20" />
       </div>
-      <div>
+      <div class="bar-track-info">
         <b>{{ room.current?.name || '还没有歌曲' }}</b
         ><span>{{ room.current?.artist || '点一首喜欢的歌吧' }}</span>
       </div>
@@ -110,13 +110,13 @@ const progress = computed(() =>
 </template>
 <style scoped>
 .player-bar {
-  position: fixed;
+  position: relative;
   z-index: 20;
   bottom: 0;
   left: 0;
   right: 0;
-  min-height: 104px;
-  padding: 15px 32px max(15px, env(safe-area-inset-bottom));
+  min-height: 84px;
+  padding: 10px 24px max(10px, env(safe-area-inset-bottom));
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 440px) minmax(0, 1fr);
   align-items: center;
@@ -147,7 +147,7 @@ const progress = computed(() =>
   height: 100%;
   object-fit: cover;
 }
-.bar-track > div:nth-child(2) {
+.bar-track-info {
   min-width: 0;
 }
 .bar-track b,
@@ -288,7 +288,7 @@ const progress = computed(() =>
 }
 @media (max-width: 900px) {
   .player-bar {
-    min-height: 76px;
+    min-height: 68px;
     display: flex;
     gap: 12px;
     padding: 10px 19px max(10px, env(safe-area-inset-bottom));

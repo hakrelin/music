@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { activeLyricIndex, parseLrc, type LyricLine } from '@/utils/lyric';
 
 const props = defineProps<{ lines: LyricLine[]; time: number; transRaw?: string }>();
@@ -21,7 +21,12 @@ async function scrollActive() {
   });
 }
 watch([active, () => props.lines], scrollActive);
-onMounted(scrollActive);
+const observer = new ResizeObserver(() => void scrollActive());
+onMounted(() => {
+  if (box.value) observer.observe(box.value);
+  void scrollActive();
+});
+onBeforeUnmount(() => observer.disconnect());
 </script>
 
 <template>
@@ -63,7 +68,14 @@ onMounted(scrollActive);
   font-size: 16px;
   font-weight: 600;
 }
-.trans{display:block;font-size:11.5px;font-weight:400;color:#77806f;margin-top:2px}\n.line.passed {
+.trans {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: #77806f;
+  margin-top: 2px;
+}
+.line.passed {
   color: #666a63;
 }
 .empty {

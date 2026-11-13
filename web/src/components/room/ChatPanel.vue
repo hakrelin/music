@@ -102,7 +102,7 @@ function color(name: string) {
 <style scoped>
 .chat-panel {
   height: 100%;
-  padding: 22px 20px 18px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -112,7 +112,7 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 20px;
+  padding: 12px 0;
   gap: 10px;
 }
 header h2 {
@@ -282,10 +282,6 @@ header .online-dot {
   box-shadow: var(--shadow-card);
 }
 @media (max-width: 900px) {
-  .chat-panel {
-    height: calc(100dvh - 245px);
-    min-height: 350px;
-  }
   .bubble {
     font-size: 13px;
   }
@@ -310,8 +306,15 @@ header .online-dot {
     font-size: 12px;
   }
 }
-.members { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #e6e3da; }
+.members { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 0; border-bottom: 1px solid #e6e3da; max-height: 76px; overflow: auto; flex: none; }
 .m-label { font-size: 11px; color: #8b8f86; }
 .m-chip { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: #eef1ea; color: #4d5648; }
 .m-chip.admin, .m-chip.root { background: #e3f0e6; color: #1d6b3a; font-weight: 600; }
+@media (max-height: 500px) {
+  .chat-panel { padding: 6px 12px; }
+  .members { max-height: 30px; padding: 2px 0; }
+  header { padding: 4px 0; }
+  .composer { margin-top: 6px; padding: 5px 8px; }
+  .composer textarea { height: 26px; min-height: 26px; line-height: 1.4; }
+}
 </style>

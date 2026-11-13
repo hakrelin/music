@@ -4,9 +4,11 @@ import Icon from '@/components/Icon.vue';
 import LyricScroller from './LyricScroller.vue';
 import { useRoomStore } from '@/stores/room';
 import { usePlayerStore } from '@/stores/player';
+import { useUiStore } from '@/stores/ui';
 import { parseLrc } from '@/utils/lyric';
 const room = useRoomStore();
 const player = usePlayerStore();
+const ui = useUiStore();
 const track = computed(() => room.current);
 const lines = computed(() => parseLrc(track.value?.lyric));
 const broken = ref(false);
@@ -16,15 +18,22 @@ watch(
 );
 </script>
 <template>
-  <section class="listening" aria-label="正在播放">
+  <section class="listening" :class="{ 'cover-hidden': !ui.coverVisible }" aria-label="正在播放">
     <div class="listening-label">
       <span class="playing-state"
         ><i class="online-dot" />{{ track ? '正在播放' : '等待点歌' }}</span
       ><span v-if="room.mode.radio" class="auto-label"
         ><Icon name="radio" :size="12" />电台自动补歌</span
       >
+      <button
+        class="cover-toggle"
+        :aria-pressed="ui.coverVisible"
+        @click="ui.toggleRoomDisplay('coverVisible')"
+      >
+        {{ ui.coverVisible ? '隐藏封面' : '显示封面' }}
+      </button>
     </div>
-    <div class="album-stage">
+    <div v-if="ui.coverVisible" class="album-stage">
       <div class="album-shadow" />
       <div class="album">
         <img
@@ -37,19 +46,21 @@ watch(
           <Icon name="music" :size="65" /><span>TEA &amp; KOMPEITO</span>
         </div>
       </div>
-      <span v-if="track?.nick" class="picked-by">{{ track.nick }} 点的歌 <span>♪</span></span>
     </div>
     <div class="song-info">
-      <h1>{{ track?.name || '第一首歌，听你的' }}</h1>
-      <p>{{ track?.artist || '点一首喜欢的歌，和大家一起听。' }}</p>
-      <small v-if="track?.album">{{ track.album }}</small>
+      <h1 :title="track?.name">{{ track?.name || '第一首歌，听你的' }}</h1>
+      <p :title="track?.artist">{{ track?.artist || '点一首喜欢的歌，和大家一起听。' }}</p>
+      <div class="song-details">
+        <small v-if="track?.album" :title="track.album">{{ track.album }}</small>
+        <small v-if="track?.nick" :title="`${track.nick} 点的歌`">{{ track.nick }} 点的歌</small>
+      </div>
     </div>
     <div v-if="lines.length" class="lyric-box">
       <LyricScroller :lines="lines" :time="player.time" :trans-raw="room.current?.lyricTrans" />
     </div>
     <div v-else class="instrumental">
       <span class="lyric-dot">♪</span>
-      <p>{{ track ? '没有歌词，就听旋律。' : '从左侧点歌，或导入一份歌单。' }}</p>
+      <p>{{ track ? '没有歌词，就听旋律。' : '点一首喜欢的歌，或导入一份歌单。' }}</p>
       <span class="tiny-wave" :class="{ playing: player.playing }" aria-hidden="true"
         ><i /><i /><i /><i /><i
       /></span>
@@ -62,9 +73,9 @@ watch(
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 24px 35px 20px;
+  padding: 12px 24px 16px;
   align-items: center;
-  overflow: auto;
+  overflow: hidden;
 }
 .listening-label {
   display: flex;
@@ -73,6 +84,9 @@ watch(
   align-self: stretch;
   font-size: 10px;
   color: var(--muted);
+  gap: 12px;
+  flex: none;
+  min-height: 32px;
 }
 .playing-state,
 .auto-label {
@@ -85,15 +99,33 @@ watch(
   height: 5px;
   box-shadow: none;
 }
+.auto-label {
+  margin-left: auto;
+}
+.cover-toggle {
+  margin-left: auto;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffffb3;
+  color: var(--ink-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.cover-toggle:hover {
+  background: var(--sage);
+  color: var(--green);
+}
 .album-stage {
   position: relative;
-  margin: 32px 0 27px;
+  margin: 12px 0 16px;
   flex-shrink: 0;
 }
 .album {
   position: relative;
   z-index: 1;
-  width: clamp(170px, 19vw, 270px);
+  width: clamp(72px, 21dvh, 200px);
+  max-width: 100%;
   aspect-ratio: 1;
   border-radius: 15px;
   overflow: hidden;
@@ -130,55 +162,53 @@ watch(
   font-size: 7px;
   letter-spacing: 3px;
 }
-.picked-by {
-  position: absolute;
-  left: 50%;
-  bottom: -17px;
-  z-index: 2;
-  transform: translateX(-50%);
-  padding: 4px 12px;
-  white-space: nowrap;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  font-size: 9px;
-  color: var(--muted);
-  box-shadow: 0 3px 10px #29473106;
-}
-.picked-by span {
-  color: var(--vermilion);
-  margin-left: 5px;
-}
 .song-info {
   text-align: center;
   max-width: 100%;
+  width: 100%;
   flex-shrink: 0;
+  margin-top: 8px;
 }
 .song-info h1 {
   font-size: clamp(19px, 1.8vw, 25px);
   line-height: 1.45;
   overflow-wrap: anywhere;
   letter-spacing: -0.6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .song-info p {
   color: var(--ink-soft);
   font-size: 12px;
   margin-top: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.song-details {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
 }
 .song-info small {
-  display: block;
   color: var(--muted);
   font-size: 10px;
-  margin-top: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.song-info small + small::before {
+  content: ' · ';
 }
 .lyric-box {
-  min-height: 115px;
-  height: 180px;
+  min-height: 0;
   flex: 1;
-  max-height: 260px;
   width: 100%;
   text-align: center;
-  margin-top: 23px;
+  margin-top: 12px;
 }
 .instrumental {
   display: flex;
@@ -188,7 +218,7 @@ watch(
   gap: 10px;
   margin: 22px 0 5px;
   flex: 1;
-  min-height: 80px;
+  min-height: 0;
   color: #636c5c;
 }
 .lyric-dot {
@@ -229,43 +259,40 @@ watch(
     transform: scaleY(0.3);
   }
 }
-@media (max-height: 800px) and (min-width: 901px) {
-  .album {
-    width: 180px;
-  }
-  .album-stage {
-    margin: 23px 0 26px;
-  }
+@media (max-width: 900px) {
   .listening {
-    padding-top: 18px;
+    padding: 10px 18px 12px;
   }
   .song-info h1 {
     font-size: 20px;
   }
-  .lyric-box {
-    margin-top: 14px;
+  .auto-label {
+    font-size: 9px;
   }
 }
-@media (max-width: 900px) {
+@media (max-height: 600px) {
+  .album-stage { margin: 4px 0; }
+  .album { width: 64px; border-width: 3px; }
+  .song-info h1 { font-size: 16px; }
+  .song-info p { margin-top: 2px; }
+  .song-info small { display: none; }
+  .lyric-box { margin-top: 4px; }
+}
+@media (max-height: 500px) and (min-width: 600px) {
   .listening {
-    padding: 22px 24px;
-    min-height: calc(100dvh - 250px);
+    display: grid;
+    grid-template-columns: 64px minmax(100px, 1fr) minmax(0, 2fr);
+    grid-template-rows: 32px minmax(0, 1fr);
+    column-gap: 12px;
   }
-  .album {
-    width: clamp(180px, 50vw, 270px);
-  }
-  .album-stage {
-    margin: 27px 0;
-  }
-  .song-info h1 {
-    font-size: 22px;
-  }
-  .lyric-box {
-    height: 180px;
-    flex: none;
-  }
-  .instrumental {
-    min-height: 90px;
-  }
+  .listening-label { grid-column: 1 / -1; }
+  .album-stage { grid-column: 1; grid-row: 2; margin: 0; }
+  .song-info { grid-column: 2; grid-row: 2; margin: 0; }
+  .lyric-box,
+  .instrumental { grid-column: 3; grid-row: 2; height: 100%; margin: 0; }
+  .cover-hidden { grid-template-columns: minmax(140px, 1fr) minmax(0, 2fr); }
+  .cover-hidden .song-info { grid-column: 1; }
+  .cover-hidden .lyric-box,
+  .cover-hidden .instrumental { grid-column: 2; }
 }
 </style>

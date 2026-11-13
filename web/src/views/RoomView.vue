@@ -116,9 +116,30 @@ watch(
             </p>
           </div>
         </div>
-        <button class="invite" @click="share">
-          <Icon name="link" :size="15" /><span>邀请朋友</span>
-        </button>
+        <div class="room-actions">
+          <div class="desktop-panels" aria-label="显示面板">
+            <button
+              :aria-pressed="ui.queueVisible"
+              aria-controls="room-queue"
+              @click="ui.toggleRoomDisplay('queueVisible')"
+            >
+              <Icon name="list" :size="15" />队列
+            </button>
+            <button
+              :aria-pressed="ui.chatVisible"
+              aria-controls="room-chat"
+              @click="ui.toggleRoomDisplay('chatVisible')"
+            >
+              <Icon name="chat" :size="15" />聊天
+            </button>
+            <button class="btn btn-primary btn-sm" @click="searchOpen = true">
+              <Icon name="plus" :size="15" />点歌
+            </button>
+          </div>
+          <button class="invite" @click="share">
+            <Icon name="link" :size="15" /><span>邀请朋友</span>
+          </button>
+        </div>
       </div>
       <div v-if="player.blocked" class="play-notice">
         <span><Icon name="volume" :size="15" />浏览器需要你点击一次，才能开始播放。</span
@@ -147,28 +168,28 @@ watch(
           <Icon :name="t.icon" :size="15" />{{ t.label }}</button
         ><button @click="searchOpen = true"><Icon name="plus" :size="15" />点歌</button>
       </nav>
-      <div class="room-layout">
-        <aside class="queue-slot" :class="{ mobileActive: mobileTab === 'queue' }">
+      <div
+        class="room-layout"
+        :class="{ 'queue-hidden': !ui.queueVisible, 'chat-hidden': !ui.chatVisible }"
+      >
+        <aside id="room-queue" class="queue-slot" :class="{ mobileActive: mobileTab === 'queue' }">
           <QueueList @search="searchOpen = true" />
         </aside>
         <div class="player-slot" :class="{ mobileActive: mobileTab === 'play' }">
           <PlayerPanel />
         </div>
-        <aside class="chat-slot" :class="{ mobileActive: mobileTab === 'chat' }">
+        <aside id="room-chat" class="chat-slot" :class="{ mobileActive: mobileTab === 'chat' }">
           <ChatPanel />
         </aside>
       </div>
-      <div class="room-bottom">
-        <span><span class="mini-star">✦</span> TEA &amp; KOMPEITO</span
-        ><a
-          v-if="icp"
+      <div v-if="icp" class="room-bottom">
+        <a
           class="beian"
           :href="icp.href"
           target="_blank"
           rel="noreferrer noopener"
           >{{ icp.text }}</a
-        ><span>听歌的时候，也可以聊聊天。</span
-        ><button @click="searchOpen = true"><Icon name="plus" :size="12" />点一首歌</button>
+        >
       </div>
     </main>
     <PlayerBar /><AppDialog :open="searchOpen" title="点一首歌" wide @close="searchOpen = false"
@@ -209,13 +230,14 @@ watch(
 .room-page {
   height: 100dvh;
   overflow: hidden;
-  padding-bottom: 104px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 .room-main {
-  max-width: 1400px;
-  margin: auto;
-  padding: 3px 32px 0;
-  height: calc(100% - 84px);
+  width: 100%;
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 24px 12px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -225,7 +247,7 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 12px 3px 20px;
+  padding: 6px 0 12px;
   flex: none;
 }
 .room-heading {
@@ -308,9 +330,30 @@ watch(
 .invite:hover {
   background: var(--paper-2);
 }
+.room-actions,
+.desktop-panels {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.desktop-panels > button:not(.btn) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.desktop-panels > button[aria-pressed='true'] {
+  background: var(--sage);
+  color: var(--green);
+}
 .room-layout {
   display: grid;
-  grid-template-columns: 270px minmax(0, 1fr) 310px;
+  grid-template-columns: minmax(220px, 20%) minmax(0, 1fr) minmax(260px, 23%);
   border: 1px solid var(--line);
   border-radius: 21px;
   overflow: hidden;
@@ -321,6 +364,7 @@ watch(
 .queue-slot {
   border-right: 1px solid var(--line);
   min-height: 0;
+  min-width: 0;
 }
 .player-slot {
   min-width: 0;
@@ -330,26 +374,18 @@ watch(
 .chat-slot {
   border-left: 1px solid var(--line);
   min-height: 0;
+  min-width: 0;
 }
 .room-bottom {
-  height: 39px;
+  min-height: 22px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 20px;
   font-size: 11px;
   color: #676c60;
   flex: none;
   padding: 0 5px;
-}
-.room-bottom > span:first-child {
-  font-size: 10px;
-  letter-spacing: 1.4px;
-}
-.mini-star {
-  color: #776638;
-  font-size: 14px;
-  margin-right: 6px;
 }
 /* 备案号：房间页底部也要有（法规要求每个页面可见） */
 .beian {
@@ -362,13 +398,8 @@ watch(
   color: var(--green);
   text-decoration: underline;
 }
-.room-bottom button {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: #5e6c54;
-}
 .play-notice {
+  flex: none;
   padding: 9px 15px;
   background: #edf3df;
   border: 1px solid #dce8cd;
@@ -451,7 +482,7 @@ watch(
 }
 @media (max-width: 1200px) {
   .room-layout {
-    grid-template-columns: 235px minmax(0, 1fr) 280px;
+    grid-template-columns: 210px minmax(0, 1fr) 250px;
   }
   .room-main {
     padding-left: 24px;
@@ -460,26 +491,26 @@ watch(
 }
 @media (max-width: 1000px) and (min-width: 901px) {
   .room-layout {
-    grid-template-columns: 205px minmax(0, 1fr) 255px;
+    grid-template-columns: 200px minmax(0, 1fr) 230px;
   }
   .room-main {
     padding-left: 15px;
     padding-right: 15px;
   }
 }
+@media (min-width: 901px) {
+  .queue-hidden { grid-template-columns: minmax(0, 1fr) minmax(260px, 23%); }
+  .chat-hidden { grid-template-columns: minmax(220px, 20%) minmax(0, 1fr); }
+  .queue-hidden.chat-hidden { grid-template-columns: minmax(0, 1fr); }
+  .queue-hidden .queue-slot,
+  .chat-hidden .chat-slot { display: none; }
+}
 @media (max-width: 900px) {
-  .room-page {
-    height: auto;
-    min-height: 100dvh;
-    overflow: visible;
-    padding-bottom: 85px;
-  }
   .room-main {
-    height: auto;
-    padding: 0 18px;
+    padding: 0 12px 8px;
   }
   .room-top {
-    padding: 7px 0 17px;
+    padding: 4px 0 8px;
     gap: 10px;
   }
   .room-heading {
@@ -496,12 +527,14 @@ watch(
     padding: 7px 9px;
     font-size: 12px;
   }
+  .desktop-panels { display: none; }
   .mobile-tabs {
     display: flex;
     align-items: center;
-    margin-bottom: 15px;
+    margin-bottom: 8px;
     border-bottom: 1px solid var(--line);
     gap: 4px;
+    flex: none;
   }
   .mobile-tabs button {
     flex: 1;
@@ -509,7 +542,7 @@ watch(
     align-items: center;
     justify-content: center;
     gap: 6px;
-    padding: 10px 0 13px;
+    padding: 7px 0 9px;
     font-size: 14px;
     color: var(--muted);
     position: relative;
@@ -529,7 +562,7 @@ watch(
     border-radius: 3px;
   }
   .room-layout {
-    display: block;
+    display: flex;
     border-radius: 17px;
   }
   .queue-slot,
@@ -540,17 +573,14 @@ watch(
   }
   .mobileActive {
     display: block;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
   }
   .room-bottom {
     font-size: 10px;
-    height: 32px;
+    min-height: 22px;
     gap: 5px;
-  }
-  .room-bottom > span:nth-child(2) {
-    display: none;
-  }
-  .room-bottom > span:first-child {
-    font-size: 7px;
   }
   .play-notice {
     font-size: 12px;
@@ -574,5 +604,13 @@ watch(
   .room-name h1 {
     font-size: 17px;
   }
+}
+@media (max-height: 500px) {
+  .room-top { padding: 0 0 6px; }
+  .room-name h1 { font-size: 17px; }
+  .room-heading p { margin-top: 0; }
+  .mobile-tabs { margin-bottom: 5px; }
+  .mobile-tabs button { padding: 3px 0 5px; }
+  .play-notice { padding: 4px 10px; margin-bottom: 6px; }
 }
 </style>

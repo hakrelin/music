@@ -143,6 +143,78 @@ test('手机切换面板时持续播放，320/390/768 像素下不横向溢出',
     );
   }
 });
+
+test('收起封面与侧栏释放歌词空间，刷新后保留选择且不打断播放', async ({ page, request }) => {
+  const id = await create(request, '布局偏好');
+  await observeAudio(page);
+  await joined(page, id);
+  await search(page);
+  await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await ensurePlaying(page);
+  const before = await page.locator('.lyrics').boundingBox();
+  await page.evaluate(() => { window.__layoutAudio = window.__testAudio; });
+  await page.getByRole('button', { name: '隐藏封面', exact: true }).click();
+  await expect(page.locator('.album-stage, .bar-cover')).toHaveCount(0);
+  const after = await page.locator('.lyrics').boundingBox();
+  expect(after.height - before.height).toBeGreaterThan(100);
+  await page.getByRole('button', { name: '队列', exact: true }).click();
+  await page.getByRole('button', { name: '聊天', exact: true }).click();
+  await expect(page.locator('.queue-panel')).toBeHidden();
+  await expect(page.locator('.chat-panel')).toBeHidden();
+  expect((await page.locator('.lyrics').boundingBox()).width - before.width).toBeGreaterThan(400);
+  expect(await page.evaluate(() => window.__layoutAudio === window.__testAudio && !window.__testAudio.paused)).toBe(true);
+  // 点歌仍有独立入口；收起队列后也能打开。
+  await page.getByRole('button', { name: '点歌', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '点一首歌', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await expect(page.locator('.room-gate')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '显示封面', exact: true })).toBeVisible();
+  await expect(page.locator('.album-stage, .bar-cover')).toHaveCount(0);
+  await expect(page.locator('.queue-panel')).toBeHidden();
+  await expect(page.locator('.chat-panel')).toBeHidden();
+  // 桌面收起偏好不影响手机通过标签访问队列和聊天。
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: '队列', exact: true }).click();
+  await expect(page.locator('.queue-panel')).toBeVisible();
+  await page.getByRole('button', { name: '聊天', exact: true }).click();
+  await expect(page.getByLabel('聊天消息', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '正在听', exact: true }).click();
+  await page.getByRole('button', { name: '显示封面', exact: true }).click();
+  await expect(page.locator('.album-stage')).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: '队列', exact: true }).click();
+  await page.getByRole('button', { name: '聊天', exact: true }).click();
+  await expect(page.locator('.queue-panel')).toBeVisible();
+  await expect(page.locator('.chat-panel')).toBeVisible();
+});
+
+test('播放页适应矮屏与手机，歌词和聊天输入不被播放条遮挡', async ({ page, request }) => {
+  const id = await create(request, '视口布局');
+  await joined(page, id);
+  await search(page);
+  await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
+  await page.keyboard.press('Escape');
+  for (const [width, height] of [[320, 568], [390, 844], [768, 1024], [1024, 768], [1440, 900], [844, 390]]) {
+    await page.setViewportSize({ width, height });
+    if (width <= 900) await page.getByRole('button', { name: '正在听', exact: true }).click();
+    for (const cover of [true, false]) {
+      await expect(page.getByRole('button', { name: cover ? '隐藏封面' : '显示封面', exact: true })).toBeVisible();
+      const lyrics = await page.locator('.lyrics').boundingBox();
+      const bar = await page.locator('.player-bar').boundingBox();
+      expect(lyrics.height).toBeGreaterThan(40);
+      expect(lyrics.y + lyrics.height).toBeLessThanOrEqual(bar.y);
+      expect(bar.y + bar.height).toBeLessThanOrEqual(height);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+      await page.getByRole('button', { name: cover ? '隐藏封面' : '显示封面', exact: true }).click();
+    }
+    if (width <= 900) await page.getByRole('button', { name: '聊天', exact: true }).click();
+    const send = await page.getByRole('button', { name: '发送消息', exact: true }).boundingBox();
+    const bar = await page.locator('.player-bar').boundingBox();
+    expect(send.y + send.height).toBeLessThanOrEqual(bar.y);
+  }
+});
 test('搜索弹窗锁定焦点并支持 Escape，设置认证及清空待播生效', async ({ page, request }) => {
   const id = await create(request, '管理测试');
   await joined(page, id);

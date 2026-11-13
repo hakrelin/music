@@ -262,8 +262,7 @@ header {
 }
 @media (max-width: 900px) {
   .queue-panel {
-    min-height: calc(100dvh - 250px);
-    padding: 20px;
+    padding: 14px;
   }
   .queue-scroll {
     max-height: none;
