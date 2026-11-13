@@ -31,7 +31,7 @@ const progress = computed(() =>
 <template>
   <footer class="player-bar" :class="{ 'has-icp': icp }" aria-label="播放控制">
     <div class="bar-track">
-      <div v-if="ui.coverVisible" class="bar-cover">
+      <div class="bar-cover">
         <img
           v-if="room.current?.cover"
           :src="room.current.cover"

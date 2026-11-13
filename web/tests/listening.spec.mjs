@@ -155,7 +155,9 @@ test('收起封面与侧栏释放歌词空间，刷新后保留选择且不打�
   const before = await page.locator('.lyrics').boundingBox();
   await page.evaluate(() => { window.__layoutAudio = window.__testAudio; });
   await page.getByRole('button', { name: '隐藏封面', exact: true }).click();
-  await expect(page.locator('.album-stage, .bar-cover')).toHaveCount(0);
+  await expect(page.locator('.album-stage')).toHaveCount(0);
+  await expect(page.locator('.bar-cover')).toBeVisible();
+  await expect(page.locator('.queue-cover img').first()).toBeVisible();
   const after = await page.locator('.lyrics').boundingBox();
   expect(after.height - before.height).toBeGreaterThan(100);
   await page.getByRole('button', { name: '队列', exact: true }).click();
@@ -171,16 +173,20 @@ test('收起封面与侧栏释放歌词空间，刷新后保留选择且不打�
   await page.reload();
   await expect(page.locator('.room-gate')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '显示封面', exact: true })).toBeVisible();
-  await expect(page.locator('.album-stage, .bar-cover')).toHaveCount(0);
+  await expect(page.locator('.album-stage')).toHaveCount(0);
+  await expect(page.locator('.bar-cover')).toBeVisible();
   await expect(page.locator('.queue-panel')).toBeHidden();
   await expect(page.locator('.chat-panel')).toBeHidden();
   // 桌面收起偏好不影响手机通过标签访问队列和聊天。
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '队列', exact: true }).click();
   await expect(page.locator('.queue-panel')).toBeVisible();
+  await expect(page.locator('.queue-cover img').first()).toBeVisible();
   await page.getByRole('button', { name: '聊天', exact: true }).click();
   await expect(page.getByLabel('聊天消息', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '正在听', exact: true }).click();
+  await expect(page.locator('.bar-cover')).toBeVisible();
+  await expect(page.locator('.album-stage')).toHaveCount(0);
   await page.getByRole('button', { name: '显示封面', exact: true }).click();
   await expect(page.locator('.album-stage')).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 1000 });

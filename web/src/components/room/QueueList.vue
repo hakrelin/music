@@ -35,11 +35,22 @@ async function like(id: string, entry?: string) {
       <p v-if="!room.queue.length" class="empty">队列空空的，来点第一首吧。</p>
       <ol>
         <li v-for="(t, i) in room.queue" :key="t.id + '-' + i" :class="{ current: i === 0 }">
-          <span class="index"
-            ><Icon v-if="i === 0" name="music" :size="15" /><template v-else>{{
-              String(i).padStart(2, '0')
-            }}</template></span
-          >
+          <div class="queue-cover">
+            <Icon name="music" :size="20" />
+            <img
+              v-if="t.cover"
+              :src="t.cover"
+              alt=""
+              loading="lazy"
+              @error="($event.target as HTMLImageElement).style.display = 'none'"
+              @load="($event.target as HTMLImageElement).style.removeProperty('display')"
+            />
+            <span class="index"
+              ><Icon v-if="i === 0" name="music" :size="12" /><template v-else>{{
+                String(i).padStart(2, '0')
+              }}</template></span
+            >
+          </div>
           <div class="track-info">
             <b :title="t.name">{{ t.name }}</b
             ><span>{{ t.artist }}</span
@@ -137,10 +148,12 @@ header {
   padding: 0 5px;
 }
 .queue-scroll li {
-  display: flex;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
   align-items: center;
-  gap: 9px;
-  padding: 14px 8px;
+  column-gap: 9px;
+  row-gap: 2px;
+  padding: 12px 8px;
   border-radius: 11px;
   min-width: 0;
 }
@@ -151,16 +164,46 @@ header {
   background: #edf3e7;
 }
 .index {
-  font-size: 12px;
-  min-width: 17px;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  font-size: 9px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 3px;
+  border-radius: 0 5px 0 5px;
+  background: #fffffff0;
   display: flex;
+  align-items: center;
   justify-content: center;
   color: #676c64;
+}
+.queue-cover {
+  grid-row: 1 / span 2;
+  align-self: start;
+  position: relative;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+  background: var(--paper-2);
+  color: var(--muted);
+}
+.queue-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .current .index {
   color: var(--green);
 }
 .track-info {
+  grid-column: 2;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -191,13 +234,17 @@ header {
   color: #676d60;
 }
 .track-end {
+  grid-column: 2;
   flex: none;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 3px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 7px;
   font-size: 11px;
   color: #656e5e;
+}
+.track-end > span:first-child {
+  margin-right: auto;
 }
 .now-label {
   font-size: 10px;
@@ -277,7 +324,7 @@ header {
     font-size: 12px;
   }
   .queue-scroll li {
-    padding: 16px 10px;
+    padding: 14px 10px;
   }
   .add-music {
     font-size: 14px;
