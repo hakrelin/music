@@ -5,9 +5,11 @@ import { useRoomStore } from '@/stores/room';
 import { usePlayerStore } from '@/stores/player';
 import { useUiStore } from '@/stores/ui';
 import { formatTime } from '@/utils/lyric';
+import { icpForHost } from '@/utils/site';
 const room = useRoomStore();
 const player = usePlayerStore();
 const ui = useUiStore();
+const icp = icpForHost();
 const liked = computed(
   () => !!room.current && room.likedIds.includes(room.current.queueId || ''),
 );
@@ -27,7 +29,7 @@ const progress = computed(() =>
 );
 </script>
 <template>
-  <footer class="player-bar" aria-label="播放控制">
+  <footer class="player-bar" :class="{ 'has-icp': icp }" aria-label="播放控制">
     <div class="bar-track">
       <div v-if="ui.coverVisible" class="bar-cover">
         <img
@@ -90,21 +92,30 @@ const progress = computed(() =>
         <span>{{ formatTime(duration) }}</span>
       </div>
     </div>
-    <div class="volume-controls">
-      <button
-        class="icon-btn"
-        :aria-label="player.muted ? '取消静音' : '静音'"
-        @click="player.toggleMute()"
-      >
-        <Icon :name="player.muted ? 'mute' : 'volume'" :size="18" /></button
-      ><input
-        type="range"
-        min="0"
-        max="100"
-        :value="Math.round(player.volume * 100)"
-        aria-label="音量"
-        @input="player.setVolume(Number(($event.target as HTMLInputElement).value) / 100)"
-      /><span>{{ Math.round(player.volume * 100) }}%</span>
+    <div class="bar-aside">
+      <div class="volume-controls">
+        <button
+          class="icon-btn"
+          :aria-label="player.muted ? '取消静音' : '静音'"
+          @click="player.toggleMute()"
+        >
+          <Icon :name="player.muted ? 'mute' : 'volume'" :size="18" /></button
+        ><input
+          type="range"
+          min="0"
+          max="100"
+          :value="Math.round(player.volume * 100)"
+          aria-label="音量"
+          @input="player.setVolume(Number(($event.target as HTMLInputElement).value) / 100)"
+        /><span>{{ Math.round(player.volume * 100) }}%</span>
+      </div>
+      <a
+        v-if="icp"
+        class="beian"
+        :href="icp.href"
+        target="_blank"
+        rel="noreferrer noopener"
+      >{{ icp.text }}</a>
     </div>
   </footer>
 </template>
@@ -244,6 +255,23 @@ const progress = computed(() =>
   background: #8daa77;
   border-radius: 3px;
 }
+.bar-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+.beian {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.beian:hover {
+  color: var(--green);
+  text-decoration: underline;
+}
 .volume-controls {
   display: flex;
   align-items: center;
@@ -290,12 +318,23 @@ const progress = computed(() =>
   .player-bar {
     min-height: 68px;
     display: flex;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 4px 12px;
     padding: 10px 19px max(10px, env(safe-area-inset-bottom));
   }
   .bar-track {
     flex: 1;
     gap: 10px;
+  }
+  .bar-aside {
+    display: none;
+  }
+  .has-icp .bar-aside {
+    display: flex;
+    flex-basis: 100%;
+  }
+  .beian {
+    font-size: 9px;
   }
   .bar-cover {
     width: 42px;

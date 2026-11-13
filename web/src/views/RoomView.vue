@@ -14,14 +14,11 @@ import { useRoomStore } from '@/stores/room';
 import { usePlayerStore } from '@/stores/player';
 import { useRoomsStore } from '@/stores/rooms';
 import { useUiStore } from '@/stores/ui';
-import { icpForHost } from '@/utils/site';
 const route = useRoute();
 const room = useRoomStore();
 const player = usePlayerStore();
 const rooms = useRoomsStore();
 const ui = useUiStore();
-// 备案号跟着访问的域名走（茶与金平糖 -2 / tea-sugar -1），见 utils/site.ts
-const icp = icpForHost();
 const settingsOpen = ref(false);
 const searchOpen = ref(false);
 const mobileTab = ref('play');
@@ -181,15 +178,6 @@ watch(
         <aside id="room-chat" class="chat-slot" :class="{ mobileActive: mobileTab === 'chat' }">
           <ChatPanel />
         </aside>
-      </div>
-      <div v-if="icp" class="room-bottom">
-        <a
-          class="beian"
-          :href="icp.href"
-          target="_blank"
-          rel="noreferrer noopener"
-          >{{ icp.text }}</a
-        >
       </div>
     </main>
     <PlayerBar /><AppDialog :open="searchOpen" title="点一首歌" wide @close="searchOpen = false"
@@ -376,28 +364,6 @@ watch(
   min-height: 0;
   min-width: 0;
 }
-.room-bottom {
-  min-height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
-  font-size: 11px;
-  color: #676c60;
-  flex: none;
-  padding: 0 5px;
-}
-/* 备案号：房间页底部也要有（法规要求每个页面可见） */
-.beian {
-  font-size: 10px;
-  color: #676c60;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.beian:hover {
-  color: var(--green);
-  text-decoration: underline;
-}
 .play-notice {
   flex: none;
   padding: 9px 15px;
@@ -576,11 +542,6 @@ watch(
     flex: 1;
     min-width: 0;
     overflow: hidden;
-  }
-  .room-bottom {
-    font-size: 10px;
-    min-height: 22px;
-    gap: 5px;
   }
   .play-notice {
     font-size: 12px;
