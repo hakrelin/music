@@ -65,6 +65,10 @@ type Options struct {
 	// OnTrackPlayed 是可选回调：某首曲子真的开始播放时触发，用来预热音频缓存。
 	// 必须是快速返回的实现（它会在自己的 goroutine 里跑）。
 	OnTrackPlayed func(model.Track)
+	// FallbackURL 是可选回调：解析播放地址失败时兜底，返回对象存储里已缓存的地址。
+	// 典型用途是网易云账号 VIP 失效 / 曲目被 403 时，让「已经缓存过」的歌继续能播。
+	// 它会在解析用的 goroutine 里调用，允许有少量网络开销（签名 URL）。
+	FallbackURL func(source, id string) (string, bool)
 }
 
 // Hub 管理所有房间。
@@ -90,6 +94,8 @@ type Hub struct {
 	radioRooms []config.RadioRoom
 
 	onPlayed func(model.Track)
+
+	fallbackURL func(source, id string) (string, bool)
 
 	closed bool
 }
@@ -127,6 +133,7 @@ func New(opts Options) *Hub {
 		idleTimeout:   opts.IdleTimeout,
 		radioRooms:    append([]config.RadioRoom(nil), opts.RadioRooms...),
 		onPlayed:      opts.OnTrackPlayed,
+		fallbackURL:   opts.FallbackURL,
 	}
 	h.presets = buildPresets(h.radioRooms, h.primary)
 	return h

@@ -75,8 +75,11 @@ func run() error {
 	// 2) 房间 hub
 	idle := time.Duration(cfg.RoomIdleMinutes) * time.Minute
 	var onPlayed func(model.Track)
+	var fallbackURL func(source, id string) (string, bool)
 	if cache.Enabled() {
 		onPlayed = func(t model.Track) { cache.Ensure(t.Source, t.ID, cacheResolve) }
+		// 解析失败（VIP 掉线 / 403 / 接口抽风）时用已缓存的音频地址兜底
+		fallbackURL = cache.Lookup
 	}
 	h := hub.New(hub.Options{
 		Version:         version,
@@ -89,6 +92,7 @@ func run() error {
 		RadioRooms:      cfg.RadioRooms,
 		Logger:          logger,
 		OnTrackPlayed:   onPlayed,
+		FallbackURL:     fallbackURL,
 	})
 	h.StartBuiltinRooms()
 

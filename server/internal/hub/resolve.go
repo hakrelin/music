@@ -136,6 +136,16 @@ func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string
 			if err == nil && strings.TrimSpace(cp.URL) == "" {
 				err = errors.New("音乐源没有返回播放地址")
 			}
+			// 兜底：解析失败（VIP 掉线、曲目 403、接口抽风）时，如果这首已经在
+			// 对象存储缓存里，就直接用缓存地址播——不让「已有本地副本」的歌被跳过。
+			if err != nil && h.fallbackURL != nil {
+				if cached, ok := h.fallbackURL(cp.Source, cp.ID); ok && strings.TrimSpace(cached) != "" {
+					h.log.Warn("播放地址解析失败，改用缓存地址兜底",
+						"source", cp.Source, "track", cp.ID, "err", err.Error(), "url", cached)
+					cp.URL = cached
+					err = nil
+				}
+			}
 			h.log.Info("播放地址解析完成", "source", cp.Source, "track", cp.ID, "lower", lower, "elapsedMs", time.Since(resolveStarted).Milliseconds(), "ok", err == nil)
 			h.resolveMu.Lock()
 			if err == nil {
