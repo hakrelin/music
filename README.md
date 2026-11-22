@@ -73,6 +73,7 @@ VITE_MOCK=1 npm --prefix web run dev
 
 - 路径优先级：`MUSIC_SECRETS_FILE` → 主配置 `secretsFile` → `<dataDir>/secrets.json`（systemd 部署下 `/var/lib/musicd/secrets.json` 可写）→ 本地开发 `server/secrets.local.json`。
 - 既可直接编辑该文件，也可以直接打开 `/admin` 管理后台，使用服务器 `rootPassword` 登录后扫码登录网易云 / B 站或粘贴显式 Cookie 与各类 Key（自动以 `0600` 权限落盘并热生效）。
+- 环境变量优先于文件，管理后台会拒绝修改由环境变量控制的字段。
 - B 站音源默认启用且默认使用登录态（`bilibili.useLogin = true`），需显式配置含 `SESSDATA` 的 Cookie（或在 `/admin` 扫码登录）。
 
 兼容既有 `server/config.local.json`（**已在 .gitignore 中，不会入库**）写法：
@@ -96,7 +97,7 @@ VIP 账号才能拿到 320k 地址；普通账号/无版权曲目会在播放时
 也可以全部用环境变量覆盖：`MUSIC_HTTP_ADDR`、`MUSIC_NETEASE_COOKIE`、`MUSIC_BILIBILI_COOKIE`、`MUSIC_BILIBILI_ENABLED`、`MUSIC_BILIBILI_USE_LOGIN`、`MUSIC_SECRETS_FILE`、`MUSIC_PROVIDER`、
 `MUSIC_DATA_DIR`、`MUSIC_ROOT_PASSWORD`、`MUSIC_ADMIN_PASSWORD`、`MUSIC_LOG_LEVEL`、`MUSIC_CONFIG`。
 
-> 示例配置里的默认口令（`654321` / `123456`）部署前务必改掉。
+> 部署前请更换示例口令（`654321` / `123456`）。`/admin` 需要配置专用的 `rootPassword`。
 
 ---
 
@@ -120,6 +121,8 @@ cp deploy/nginx.conf.example /etc/nginx/conf.d/music.conf
 # 改 server_name / 证书路径后：
 nginx -t && systemctl reload nginx
 ```
+
+已有音频缓存索引按账号序号绑定 AccessKey 和存储空间。管理后台可更新原账号的 SecretKey、CDN 地址和淘汰设置，也可在末尾添加账号。
 
 更新版本：替换 `/usr/local/bin/musicd` 后 `systemctl restart musicd`。
 **前端已经 embed 进二进制**，不需要单独发静态文件。

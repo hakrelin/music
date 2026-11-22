@@ -591,6 +591,13 @@ func TestSearchPlaylistsAnonymousSkipsCloudSearch(t *testing.T) {
 
 // TestResolveFallsBackTo128kAndForcesHTTPS 验证 320k 空地址时退 128k，且 http 强转 https。
 func TestResolveFallsBackTo128kAndForcesHTTPS(t *testing.T) {
+	// 该测试只验证码率切换，提前记录节点健康以免探测公网的虚构地址。
+	cdnRemember("m10", true)
+	t.Cleanup(func() {
+		cdnMemoMu.Lock()
+		delete(cdnMemo, "m10")
+		cdnMemoMu.Unlock()
+	})
 	var calls atomic.Int32
 	p := newMockProvider(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/song/enhance/player/url") {

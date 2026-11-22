@@ -102,14 +102,22 @@ export const adminApi = {
     }),
 
   neteaseStatus: () => adminFetch<NeteaseAccountStatus>('/netease/status'),
-  neteaseQRCreate: () =>
-    adminFetch<QRCreateResp>('/netease/qr/create', { method: 'POST', body: '{}' }),
-  neteaseQRPoll: (key: string) =>
-    adminFetch<QRPollResp>(`/netease/qr/poll?key=${encodeURIComponent(key)}`),
+  neteaseQRCreate: (signal: AbortSignal) =>
+    adminFetch<QRCreateResp>('/netease/qr/create', { method: 'POST', body: '{}', signal }),
+  neteaseQRPoll: (key: string, signal: AbortSignal) =>
+    adminFetch<QRPollResp>('/netease/qr/poll', {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+      signal,
+    }),
 
   biliStatus: () => adminFetch<BiliAccountStatus>('/bilibili/status'),
-  biliQRCreate: () =>
-    adminFetch<QRCreateResp>('/bilibili/qr/create', { method: 'POST', body: '{}' }),
-  biliQRPoll: (key: string) =>
-    adminFetch<QRPollResp>(`/bilibili/qr/poll?key=${encodeURIComponent(key)}`),
+  biliQRCreate: (signal: AbortSignal) =>
+    adminFetch<QRCreateResp>('/bilibili/qr/create', { method: 'POST', body: '{}', signal }),
+  biliQRPoll: (key: string, signal: AbortSignal) =>
+    adminFetch<QRPollResp>('/bilibili/qr/poll', {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+      signal,
+    }),
 };

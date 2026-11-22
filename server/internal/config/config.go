@@ -120,6 +120,8 @@ func (c Config) Clone() Config {
 	return cp
 }
 
+const DefaultRootPassword = "654321"
+
 // Default 返回内置默认配置（与 config.example.json 保持一致）。
 func Default() Config {
 	return Config{
@@ -135,7 +137,7 @@ func Default() Config {
 			Name:    "茶与金平糖",
 			Tagline: "和大家一起听歌",
 		},
-		RootPassword:  "654321",
+		RootPassword:  DefaultRootPassword,
 		AdminPassword: "123456",
 		RadioRooms: []RadioRoom{{
 			Name: "东方电台",
@@ -216,8 +218,8 @@ func LoadWithMeta(file string) (Config, Meta, error) {
 	}
 
 	// 允许用 MUSIC_DATA_DIR / MUSIC_SECRETS_FILE 影响 secrets.json 的定位。
-	if v, ok := os.LookupEnv("MUSIC_DATA_DIR"); ok && strings.TrimSpace(v) != "" {
-		cfg.DataDir = v
+	if v, ok := os.LookupEnv("MUSIC_DATA_DIR"); ok {
+		cfg.DataDir = strings.TrimSpace(v)
 	}
 	if v, ok := os.LookupEnv("MUSIC_SECRETS_FILE"); ok && strings.TrimSpace(v) != "" {
 		cfg.SecretsFile = v
@@ -307,7 +309,9 @@ func applyEnv(cfg *Config) []string {
 
 	setStr("MUSIC_HTTP_ADDR", &cfg.HTTPAddr)
 	setStr("MUSIC_PROVIDER", &cfg.Provider)
-	setStr("MUSIC_SECRETS_FILE", &cfg.SecretsFile)
+	if strings.TrimSpace(os.Getenv("MUSIC_SECRETS_FILE")) != "" {
+		overrides = append(overrides, "MUSIC_SECRETS_FILE")
+	}
 	setStr("MUSIC_NETEASE_COOKIE", &cfg.NeteaseCookie)
 	if v, ok := os.LookupEnv("MUSIC_BILIBILI_COOKIE"); ok {
 		cfg.Bilibili.Cookie = v
@@ -316,7 +320,10 @@ func applyEnv(cfg *Config) []string {
 	}
 	setBool("MUSIC_BILIBILI_ENABLED", &cfg.Bilibili.Enabled)
 	setBool("MUSIC_BILIBILI_USE_LOGIN", &cfg.Bilibili.UseLogin)
-	setStr("MUSIC_DATA_DIR", &cfg.DataDir)
+	if v, ok := os.LookupEnv("MUSIC_DATA_DIR"); ok {
+		cfg.DataDir = strings.TrimSpace(v)
+		overrides = append(overrides, "MUSIC_DATA_DIR")
+	}
 	setStr("MUSIC_ROOT_PASSWORD", &cfg.RootPassword)
 	setStr("MUSIC_ADMIN_PASSWORD", &cfg.AdminPassword)
 	setStr("MUSIC_LOG_LEVEL", &cfg.LogLevel)

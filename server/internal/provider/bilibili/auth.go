@@ -145,12 +145,12 @@ func (p *Provider) PollLoginQR(ctx context.Context, key string) (QRPollResult, e
 			}
 		}
 		// 同样解析 data.url 查询参数中可能直接带出的 SESSDATA/bili_jct/DedeUserID（兼容老响应）
-		if parsed, perr := url.Parse(strings.TrimSpace(env.Data.URL)); perr == nil {
+		if parsed := bilibiliLoginURL(env.Data.URL); parsed != nil {
 			q := parsed.Query()
 			for _, name := range []string{"SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5"} {
 				if cookieMap[name] == "" {
 					if v := strings.TrimSpace(q.Get(name)); v != "" {
-						cookieMap[name] = v
+						cookieMap[name] = strings.ReplaceAll(v, ",", "%2C")
 					}
 				}
 			}
@@ -180,14 +180,35 @@ func (p *Provider) PollLoginQR(ctx context.Context, key string) (QRPollResult, e
 	return out, nil
 }
 
-func (p *Provider) collectCrossDomainCookies(ctx context.Context, target string) map[string]string {
-	out := make(map[string]string)
+func bilibiliLoginURL(target string) *url.URL {
 	u, err := url.Parse(strings.TrimSpace(target))
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
-		return out
+	if err != nil || u.Scheme != "https" || u.User != nil || (u.Port() != "" && u.Port() != "443") {
+		return nil
 	}
+	host := strings.ToLower(u.Hostname())
+	if host == "bilibili.com" || strings.HasSuffix(host, ".bilibili.com") {
+		return u
+	}
+	return nil
+}
+
+func (p *Provider) collectCrossDomainCookies(ctx context.Context, target string) map[string]string {
+	u := bilibiliLoginURL(target)
+	if u == nil {
+		return nil
+	}
+	out := make(map[string]string)
 	jar, _ := cookiejar.New(nil)
-	hc := &http.Client{Timeout: 8 * time.Second, Jar: jar}
+	hc := &http.Client{
+		Timeout: 8 * time.Second,
+		Jar:     jar,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= 5 || bilibiliLoginURL(r.URL.String()) == nil {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return out

@@ -50,7 +50,7 @@ async function doSearch(reset = true) {
   if (reset) page.value = 1;
   searching.value = true;
   try {
-    const res = await room.search(q, page.value, pageSize, selectedSource.value || undefined);
+    const res = await room.search(q, page.value, pageSize, activeSource.value || undefined);
     results.value = res.tracks;
     total.value = res.total;
     searched.value = true;

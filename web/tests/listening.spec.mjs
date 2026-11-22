@@ -820,3 +820,35 @@ test('管理员后台支持口令认证、B站/网易云配置与自定义 Key �
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '管理员后台', exact: true })).toBeVisible();
 });
+
+test('扫码查询串行运行，取消后忽略迟到的确认', async ({ page }) => {
+  const provider = page.locator('section[aria-label="哔哩哔哩账号与配置"]');
+  await page.route('**/api/admin/bilibili/qr/create', (route) =>
+    route.fulfill({ json: { key: 'qr-test', qrSvgDataUrl: 'data:image/svg+xml,%3Csvg/%3E' } }),
+  );
+  let polls = 0;
+  let finishPoll;
+  const delayedPoll = new Promise((resolve) => { finishPoll = resolve; });
+  await page.route('**/api/admin/bilibili/qr/poll', async (route) => {
+    expect(route.request().method()).toBe('POST');
+    expect(route.request().postDataJSON()).toEqual({ key: 'qr-test' });
+    polls++;
+    await delayedPoll;
+    await route.fulfill({ json: { status: 'confirmed', saved: true, message: '已确认' } }).catch(() => {});
+  });
+
+  await page.goto('/admin');
+  await page.getByLabel('管理员口令', { exact: true }).fill('test-room-owner');
+  await page.getByRole('button', { name: '登录管理后台', exact: true }).click();
+  await provider.getByRole('button', { name: '扫码登录 B 站', exact: true }).click();
+  await expect.poll(() => polls).toBe(1);
+  try {
+    await page.waitForTimeout(2300);
+    expect(polls).toBe(1);
+    await provider.getByRole('button', { name: '取消扫码', exact: true }).click();
+  } finally {
+    finishPoll();
+  }
+  await expect(provider.getByAltText('B站登录二维码')).toHaveCount(0);
+  await expect(page.getByText('B 站扫码登录成功，Cookie 已保存并生效')).toHaveCount(0);
+});

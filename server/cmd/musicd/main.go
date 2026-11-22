@@ -175,10 +175,10 @@ func run() error {
 
 // buildCacheResolver 构造「解析低码率真实上游音频地址」回调，供对象存储预热下载使用。
 func buildCacheResolver(reg *provider.Registry) storage.Resolver {
-	return func(ctx context.Context, source, id string) (string, error) {
+	return func(ctx context.Context, source, id string) ([]string, error) {
 		p, ok := reg.For(source)
 		if !ok {
-			return "", fmt.Errorf("未知音乐源 %q", source)
+			return nil, fmt.Errorf("未知音乐源 %q", source)
 		}
 		if ur, ok := p.(provider.UpstreamAudioResolver); ok {
 			return ur.ResolveUpstreamAudio(ctx, id, true)
@@ -186,12 +186,12 @@ func buildCacheResolver(reg *provider.Registry) storage.Resolver {
 		t := model.Track{ID: id, Source: source}
 		if rp, ok := p.(provider.RefreshProvider); ok {
 			if err := rp.ResolveFresh(ctx, &t, true); err != nil {
-				return "", err
+				return nil, err
 			}
 		} else if err := p.Resolve(ctx, &t); err != nil {
-			return "", err
+			return nil, err
 		}
-		return t.URL, nil
+		return []string{t.URL}, nil
 	}
 }
 

@@ -17,12 +17,13 @@ import (
 // 与「在管理后台里显式清空/关闭」——这样即使只读的 /etc/musicd/config.json 里留着旧
 // Cookie，管理员在后台退出登录后重启也不会被旧配置复活。
 type Secrets struct {
-	Version  int               `json:"version"`
-	Auth     AuthSecrets       `json:"auth,omitempty"`
-	Netease  NeteaseSecrets    `json:"netease,omitempty"`
-	Bilibili BilibiliSecrets   `json:"bilibili,omitempty"`
-	Storage  *ObjectStorage    `json:"storage,omitempty"`
-	Keys     map[string]string `json:"keys,omitempty"`
+	Version     int               `json:"version"`
+	Auth        AuthSecrets       `json:"auth,omitempty"`
+	Netease     NeteaseSecrets    `json:"netease,omitempty"`
+	Bilibili    BilibiliSecrets   `json:"bilibili,omitempty"`
+	Storage     *ObjectStorage    `json:"storage,omitempty"`
+	Keys        map[string]string `json:"keys,omitempty"`
+	DeletedKeys []string          `json:"deletedKeys,omitempty"`
 }
 
 // AuthSecrets 管理服务器级超管与房间管理员口令。
@@ -46,8 +47,9 @@ type BilibiliSecrets struct {
 // Clone 返回 Secrets 的深拷贝。
 func (s Secrets) Clone() Secrets {
 	cp := Secrets{
-		Version: s.Version,
-		Auth:    s.Auth,
+		Version:     s.Version,
+		Auth:        s.Auth,
+		DeletedKeys: append([]string(nil), s.DeletedKeys...),
 	}
 	if s.Netease.Cookie != nil {
 		v := *s.Netease.Cookie
@@ -145,13 +147,24 @@ func SaveSecrets(path string, s Secrets) error {
 		return fmt.Errorf("序列化密钥配置失败: %w", err)
 	}
 	blob = append(blob, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, blob, 0o600); err != nil {
-		return fmt.Errorf("写入临时密钥配置 %s: %w", tmp, err)
+	f, err := os.CreateTemp(dir, ".musicd-secrets-*")
+	if err != nil {
+		return fmt.Errorf("创建临时密钥配置: %w", err)
 	}
-	_ = os.Chmod(tmp, 0o600)
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err := f.Write(blob); err != nil {
+		f.Close()
+		return fmt.Errorf("写入临时密钥配置: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("同步临时密钥配置: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("关闭临时密钥配置: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("替换密钥配置 %s: %w", path, err)
 	}
 	return nil
@@ -184,6 +197,13 @@ func ApplySecrets(cfg *Config, s Secrets) {
 		st.Accounts = append([]StorageAccount(nil), s.Storage.Accounts...)
 		cfg.Storage = st
 	}
+	for _, deleted := range s.DeletedKeys {
+		for k := range cfg.Keys {
+			if strings.TrimSpace(k) == strings.TrimSpace(deleted) {
+				delete(cfg.Keys, k)
+			}
+		}
+	}
 	if s.Keys != nil {
 		if cfg.Keys == nil {
 			cfg.Keys = make(map[string]string, len(s.Keys))
@@ -204,13 +224,8 @@ func CheckWritable(path string) bool {
 	if path == "" {
 		return false
 	}
-	if _, err := os.Stat(path); err == nil {
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			return false
-		}
-		_ = f.Close()
-		return true
+	if st, err := os.Stat(path); err == nil && !st.Mode().IsRegular() {
+		return false
 	}
 	dir := filepath.Dir(path)
 	if dir == "" {

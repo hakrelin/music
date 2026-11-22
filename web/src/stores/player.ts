@@ -238,7 +238,8 @@ export const usePlayerStore = defineStore('player', {
           candidate.refreshing = false;
         }
         // 预取也要有同源兜底，否则下一首开播时同样会卡在 403 节点上。
-        if (candidate.retries >= 2) url = streamFallbackUrl(track) || url;
+        if (candidate.retries >= 2 && (track.source !== 'bili' || !url))
+          url = streamFallbackUrl(track, true) || url;
         if (prepared !== candidate || next === audio || !url) return;
         next.src = url;
         next.load();
@@ -299,8 +300,8 @@ export const usePlayerStore = defineStore('player', {
           if (!url || url === oldUrl) url = fallbackMediaUrl(oldUrl) || url || oldUrl;
           // 最后一招：走同源 /api/stream。命中对象存储就直连 COS，没命中由服务端
           // 挑一个健康的 CDN 节点再 302，绕开节点 403 与签名过期。
-          if (attempt >= 2) {
-            const proxied = streamFallbackUrl(track);
+          if (attempt >= 2 && (track?.source !== 'bili' || !refreshed)) {
+            const proxied = streamFallbackUrl(track, true);
             if (proxied && proxied !== url) url = proxied;
           }
           if (refreshed) sourceURL = refreshed.url;
@@ -332,6 +333,7 @@ export const usePlayerStore = defineStore('player', {
       if (autoPlay) this.interrupted = false;
       lastProgressAt = Date.now();
       lastProgressTime = 0;
+      const newPlayback = this.startedAt !== startedAt;
       this.startedAt = startedAt;
       this._retries = 0;
       this.failed = false;
@@ -385,10 +387,13 @@ export const usePlayerStore = defineStore('player', {
           sourceURL = prepared.resolvedURL;
         }
         if (sameEntry(prepared?.track || null, track)) clearPrepared();
-        this.ready = false;
-        this.loading = true;
-        if (audio.getAttribute('src') === playbackURL) this.seekToTarget(true);
-        else {
+        if (audio.getAttribute('src') === playbackURL && !audio.error) {
+          this.ready = audio.readyState >= HTMLMediaElement.HAVE_METADATA;
+          this.loading = audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
+          this.seekToTarget(true, newPlayback);
+        } else {
+          this.ready = false;
+          this.loading = true;
           audio.src = playbackURL;
           audio.load();
         }
@@ -466,12 +471,12 @@ export const usePlayerStore = defineStore('player', {
         /* metadata not ready */
       }
     },
-    seekToTarget(force = false) {
+    seekToTarget(force = false, rewind = false) {
       if (
         !audio.getAttribute('src') ||
         !Number.isFinite(audio.duration) ||
         audio.duration <= 0 ||
-        audio.seeking
+        (audio.seeking && !rewind)
       )
         return;
       if (!force && audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
@@ -500,7 +505,8 @@ export const usePlayerStore = defineStore('player', {
         }
         if (!seekable) return;
       }
-      if (target - audio.currentTime > 1.5) this.seekTo(target);
+      const drift = target - audio.currentTime;
+      if (drift > 1.5 || (rewind && drift < 0)) this.seekTo(target);
     },
     sync(offset: number) {
       this.offset = offset;

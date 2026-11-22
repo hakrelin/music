@@ -289,4 +289,4 @@ location / {
 - B 站播放地址统一走同源 `/api/stream/{id}?source=bili`：优先 302 到对象存储已缓存音频（`audio/bili/{id}.m4a`，`audio/mp4`），未命中时携带 `Referer: https://www.bilibili.com/` 与 `Range` 透传纯音频流并后台异步预热。
 - 新增独立密钥配置文件（`server/secrets.example.json`，运行时默认 `<dataDir>/secrets.json` 或 `server/secrets.local.json`，权限 `0600`），统一管理超管/管理员口令、网易云与 B 站显式 Cookie、多吉云对象存储账号及自定义 `keys` 字典，向后兼容既有 `config.json`。
 - 房间主播放区封面默认改为无大封面（`coverVisible` 默认 `false`，用户可手动切换并持久化，底栏和队列缩略图保持不变）。
-- 新增 `/admin` 管理员后台与 `/api/admin/**` 接口：以服务器 `rootPassword` 认证（常量时间比较、IP 登录限流、`HttpOnly; SameSite=Strict` 会话 Cookie），支持网易云与 B 站纯标准库二维码扫码登录（`server/internal/qrcode`）、显式 Cookie 配置、对象存储与自定义 Key 配置及口令修改，落盘并热生效。
+- 新增 `/admin` 管理员后台与 `/api/admin/**` 接口：以专用 `rootPassword` 认证（常量时间比较、IP 登录限流、`HttpOnly; SameSite=Strict` 会话 Cookie），支持网易云与 B 站纯标准库二维码扫码登录（`server/internal/qrcode`）、显式 Cookie 配置、对象存储与自定义 Key 配置及口令修改，落盘并热生效。

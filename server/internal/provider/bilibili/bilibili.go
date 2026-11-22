@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -43,8 +44,9 @@ type Config struct {
 }
 
 type cachedStream struct {
-	urls []string
-	exp  time.Time
+	track model.Track
+	urls  []string
+	exp   time.Time
 }
 
 // Provider 实现 provider.Provider、DetailProvider、RefreshProvider、
@@ -64,8 +66,9 @@ type Provider struct {
 	buvid4   string
 	buvidExp time.Time
 
-	streams    map[string]cachedStream
-	refreshSeq atomic.Uint64
+	streams       map[string]cachedStream
+	configVersion uint64
+	refreshSeq    atomic.Uint64
 }
 
 // New 构造 B 站 provider。
@@ -74,11 +77,13 @@ func New(cfg Config) *Provider {
 	if timeout <= 0 {
 		timeout = 12 * time.Second
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = timeout
 	return &Provider{
 		cookie:       sanitizeCookie(cfg.Cookie),
 		useLogin:     cfg.UseLogin,
 		client:       &http.Client{Timeout: timeout},
-		streamClient: &http.Client{Timeout: 0}, // 流式代理不设总超时，由请求上下文控制
+		streamClient: &http.Client{Transport: transport},
 		apiBase:      defaultAPIBase,
 		passportBase: defaultPassBase,
 		streams:      make(map[string]cachedStream),
@@ -91,6 +96,7 @@ func (p *Provider) Name() string { return sourceName }
 // UpdateConfig 热更新 B 站配置（Cookie / 登录态开关），同时清理缓存的 WBI 密钥和音频流地址。
 func (p *Provider) UpdateConfig(cfg Config) {
 	p.mu.Lock()
+	p.configVersion++
 	p.cookie = sanitizeCookie(cfg.Cookie)
 	p.useLogin = cfg.UseLogin
 	p.wbiMixin = ""
@@ -162,19 +168,20 @@ func (p *Provider) outgoingCookie(ctx context.Context, includeBuvid bool) string
 	if !includeBuvid {
 		return cookie
 	}
-	if hasCookieKey(cookie, "buvid3") {
+	hasB3 := hasCookieKey(cookie, "buvid3")
+	hasB4 := hasCookieKey(cookie, "buvid4")
+	if hasB3 && hasB4 {
 		return cookie
 	}
 	b3, b4 := p.ensureBuvid(ctx)
-	if b3 == "" {
-		return cookie
-	}
 	parts := []string{}
 	if cookie != "" {
 		parts = append(parts, cookie)
 	}
-	parts = append(parts, "buvid3="+b3)
-	if b4 != "" && !hasCookieKey(cookie, "buvid4") {
+	if !hasB3 && b3 != "" {
+		parts = append(parts, "buvid3="+b3)
+	}
+	if !hasB4 && b4 != "" {
 		parts = append(parts, "buvid4="+b4)
 	}
 	return strings.Join(parts, "; ")
@@ -206,10 +213,10 @@ func (p *Provider) Search(ctx context.Context, q string, page, size int) ([]mode
 			return nil, 0, err
 		}
 		total := len(tracks)
-		start := (page - 1) * size
-		if start >= total {
+		if total == 0 || page-1 > (total-1)/size {
 			return []model.Track{}, total, nil
 		}
+		start := (page - 1) * size
 		end := start + size
 		if end > total {
 			end = total
@@ -347,16 +354,11 @@ func (p *Provider) lookupVideoTracks(ctx context.Context, bvid string, aid int64
 	title := cleanBiliText(v.Title)
 	artist := cleanBiliText(v.Owner.Name)
 	cover := forceHTTPS(v.Pic)
+	if wantPage > max(1, len(v.Pages)) {
+		return nil, fmt.Errorf("B站视频没有 P%d", wantPage)
+	}
 	if len(v.Pages) <= 1 {
-		return []model.Track{{
-			ID:       v.BVid,
-			Source:   sourceName,
-			Name:     title,
-			Artist:   artist,
-			Album:    "哔哩哔哩",
-			Cover:    cover,
-			Duration: v.Duration,
-		}}, nil
+		return []model.Track{trackFromView(v, 1)}, nil
 	}
 	tracks := make([]model.Track, 0, len(v.Pages))
 	for _, pg := range v.Pages {
@@ -402,6 +404,9 @@ func (p *Provider) TrackDetail(ctx context.Context, id string) (model.Track, err
 	v, err := p.fetchView(ctx, bvid, 0)
 	if err != nil {
 		return model.Track{}, err
+	}
+	if pageNum > max(1, len(v.Pages)) {
+		return model.Track{}, fmt.Errorf("B站视频没有 P%d", pageNum)
 	}
 	return trackFromView(v, pageNum), nil
 }
@@ -510,7 +515,7 @@ func (p *Provider) resolveTrack(ctx context.Context, t *model.Track, lower, forc
 	if t.Cover == "" {
 		t.Cover = meta.Cover
 	}
-	if t.Duration <= 0 {
+	if meta.Duration > 0 {
 		t.Duration = meta.Duration
 	}
 
@@ -526,18 +531,12 @@ func (p *Provider) resolveTrack(ctx context.Context, t *model.Track, lower, forc
 }
 
 // ResolveUpstreamAudio 返回真实的 B 站 DASH 纯音频上游地址（供对象存储缓存下载）。
-func (p *Provider) ResolveUpstreamAudio(ctx context.Context, id string, lower bool) (string, error) {
+func (p *Provider) ResolveUpstreamAudio(ctx context.Context, id string, lower bool) ([]string, error) {
 	if err := p.requireLoginIfNeeded(); err != nil {
-		return "", err
+		return nil, err
 	}
-	_, urls, err := p.resolveUpstreamCandidates(ctx, id, lower, true)
-	if err != nil {
-		return "", err
-	}
-	if len(urls) == 0 {
-		return "", errors.New("未找到可用 B 站纯音频流")
-	}
-	return urls[0], nil
+	_, urls, err := p.resolveUpstreamCandidates(ctx, id, lower, false)
+	return urls, err
 }
 
 type dashAudioItem struct {
@@ -558,36 +557,43 @@ func (p *Provider) streamCacheKey(id string, lower bool) string {
 	return id
 }
 
-func (p *Provider) getCachedStream(id string, lower bool) ([]string, bool) {
+func (p *Provider) getCachedStream(id string, lower bool) (cachedStream, bool) {
 	key := p.streamCacheKey(id, lower)
 	p.mu.RLock()
 	e, ok := p.streams[key]
 	p.mu.RUnlock()
 	if !ok || time.Now().After(e.exp) || len(e.urls) == 0 {
-		return nil, false
+		return cachedStream{}, false
 	}
-	return append([]string(nil), e.urls...), true
+	return e, true
 }
 
-func (p *Provider) putCachedStream(id string, lower bool, urls []string) {
+func (p *Provider) putCachedStream(id string, lower bool, track model.Track, urls []string, version uint64) {
 	key := p.streamCacheKey(id, lower)
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.configVersion != version {
+		return
+	}
 	if len(p.streams) > 512 {
 		p.streams = make(map[string]cachedStream)
 	}
 	p.streams[key] = cachedStream{
-		urls: append([]string(nil), urls...),
-		exp:  time.Now().Add(streamCacheTTL),
+		track: track,
+		urls:  urls,
+		exp:   time.Now().Add(streamCacheTTL),
 	}
-	p.mu.Unlock()
 }
 
 func (p *Provider) resolveUpstreamCandidates(ctx context.Context, id string, lower, forceFresh bool) (model.Track, []string, error) {
 	if !forceFresh {
-		if urls, ok := p.getCachedStream(id, lower); ok {
-			return model.Track{ID: id, Source: sourceName}, urls, nil
+		if entry, ok := p.getCachedStream(id, lower); ok {
+			return entry.track, entry.urls, nil
 		}
 	}
+	p.mu.RLock()
+	version := p.configVersion
+	p.mu.RUnlock()
 	bvid, pageNum, err := parseTrackID(id)
 	if err != nil {
 		return model.Track{}, nil, err
@@ -596,15 +602,12 @@ func (p *Provider) resolveUpstreamCandidates(ctx context.Context, id string, low
 	if err != nil {
 		return model.Track{}, nil, err
 	}
+	if pageNum > max(1, len(v.Pages)) {
+		return model.Track{}, nil, fmt.Errorf("B站视频没有 P%d", pageNum)
+	}
 	cid := v.Cid
-	if len(v.Pages) > 0 {
-		idx := pageNum - 1
-		if idx < 0 || idx >= len(v.Pages) {
-			idx = 0
-		}
-		if v.Pages[idx].Cid > 0 {
-			cid = v.Pages[idx].Cid
-		}
+	if len(v.Pages) > 0 && v.Pages[pageNum-1].Cid > 0 {
+		cid = v.Pages[pageNum-1].Cid
 	}
 	if cid <= 0 {
 		return model.Track{}, nil, fmt.Errorf("B站视频 %s 缺少 cid", bvid)
@@ -659,7 +662,7 @@ func (p *Provider) resolveUpstreamCandidates(ctx context.Context, id string, low
 	if len(urls) == 0 {
 		return meta, nil, errors.New("B站音频流地址为空")
 	}
-	p.putCachedStream(id, lower, urls)
+	p.putCachedStream(id, lower, meta, urls, version)
 	return meta, urls, nil
 }
 
@@ -717,6 +720,13 @@ func selectAudioURLs(items []dashAudioItem, lower bool) []string {
 		out = append(out, u)
 	}
 	for _, it := range cands {
+		codecs := strings.ToLower(strings.TrimSpace(it.Codecs))
+		if codecs != "" && codecs != "mp4a" && !strings.HasPrefix(codecs, "mp4a.") {
+			continue
+		}
+		if codecs == "" && rank(it.ID) == 3 {
+			continue
+		}
 		if it.BaseURL != "" {
 			add(it.BaseURL)
 		} else {
@@ -738,7 +748,8 @@ func (p *Provider) ServeAudio(w http.ResponseWriter, r *http.Request, id string,
 		return false
 	}
 	ctx := r.Context()
-	urls, cached := p.getCachedStream(id, lower)
+	entry, cached := p.getCachedStream(id, lower)
+	urls := entry.urls
 	if !cached {
 		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		var err error
@@ -791,18 +802,25 @@ func (p *Provider) proxyFromCandidates(w http.ResponseWriter, r *http.Request, u
 			}
 			continue
 		}
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && r.Header.Get("Range") != "" {
+			rng := resp.Header.Get("Content-Range")
+			_ = resp.Body.Close()
+			if !strings.HasPrefix(rng, "bytes */") {
+				continue
+			}
+			w.Header().Set("Content-Range", rng)
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return true
+		}
+		if (resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent) ||
+			!isAudioContentType(resp.Header.Get("Content-Type")) {
 			_ = resp.Body.Close()
 			continue
 		}
-		ctype := resp.Header.Get("Content-Type")
-		if ctype == "" || strings.HasPrefix(ctype, "application/octet-stream") {
-			ctype = "audio/mp4"
-		}
-		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Content-Type", "audio/mp4")
 		if ar := resp.Header.Get("Accept-Ranges"); ar != "" {
 			w.Header().Set("Accept-Ranges", ar)
-		} else {
+		} else if resp.StatusCode == http.StatusPartialContent {
 			w.Header().Set("Accept-Ranges", "bytes")
 		}
 		if cr := resp.Header.Get("Content-Range"); cr != "" {
@@ -822,6 +840,16 @@ func (p *Provider) proxyFromCandidates(w http.ResponseWriter, r *http.Request, u
 	return false
 }
 
+func isAudioContentType(header string) bool {
+	contentType, _, _ := mime.ParseMediaType(header)
+	switch contentType {
+	case "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/iso.segment", "video/mp4", "video/iso.segment", "application/octet-stream":
+		return true
+	default:
+		return header == ""
+	}
+}
+
 // DownloadAudio 拉取整段 B 站音频（供对象存储缓存预热用），带 Referer 且限制最大字节数。
 func DownloadAudio(ctx context.Context, rawURL string, limit int64) (data []byte, truncated bool, err error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
@@ -838,8 +866,11 @@ func DownloadAudio(ctx context.Context, rawURL string, limit int64) (data []byte
 		return nil, false, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+	if resp.StatusCode != http.StatusOK {
 		return nil, false, fmt.Errorf("B站音频上游返回 HTTP %d", resp.StatusCode)
+	}
+	if !isAudioContentType(resp.Header.Get("Content-Type")) {
+		return nil, false, errors.New("B站音频上游返回了非音频内容")
 	}
 	buf := make([]byte, 0, 1<<20)
 	chunk := make([]byte, 64<<10)
@@ -863,57 +894,66 @@ func DownloadAudio(ctx context.Context, rawURL string, limit int64) (data []byte
 // ---- 解析与清洗工具 ----
 
 var (
-	reBV      = regexp.MustCompile(`(?i)\b(BV1[0-9A-Za-z]{9})\b`)
-	reAV      = regexp.MustCompile(`(?i)\bav(\d{1,12})\b`)
-	rePageQ   = regexp.MustCompile(`(?i)[?&]p=(\d{1,4})`)
-	reHTMLTag = regexp.MustCompile(`<[^>]+>`)
+	reVideoRef = regexp.MustCompile(`(?i)^(BV[0-9A-Za-z]{10}|av[0-9]{1,19})(?:_p([1-9][0-9]*))?$`)
+	reHTMLTag  = regexp.MustCompile(`<[^>]+>`)
 )
 
 func extractVideoRef(raw string) (bvid string, aid int64, page int, ok bool) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return "", 0, 0, false
+	input := strings.TrimSpace(raw)
+	match := reVideoRef.FindStringSubmatch(input)
+	var pageQuery string
+	if match == nil {
+		u, err := url.Parse(input)
+		if err != nil || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
+			return "", 0, 0, false
+		}
+		host := strings.ToLower(u.Hostname())
+		if host != "bilibili.com" && !strings.HasSuffix(host, ".bilibili.com") {
+			return "", 0, 0, false
+		}
+		path, found := strings.CutPrefix(strings.TrimSuffix(u.Path, "/"), "/video/")
+		if !found {
+			return "", 0, 0, false
+		}
+		match = reVideoRef.FindStringSubmatch(path)
+		if match == nil {
+			return "", 0, 0, false
+		}
+		pageQuery = u.Query().Get("p")
 	}
 	page = 1
-	if pm := rePageQ.FindStringSubmatch(s); len(pm) == 2 {
-		if n, err := strconv.Atoi(pm[1]); err == nil && n > 0 {
-			page = n
-		}
+	part := match[2]
+	if pageQuery != "" {
+		part = pageQuery
 	}
-	if m := reBV.FindStringSubmatch(s); len(m) == 2 {
-		// 仅当输入本身是 BV 号或 B 站链接时直接按视频解析，避免误拦截普通标题搜索
-		if strings.EqualFold(s, m[1]) || strings.Contains(strings.ToLower(s), "bilibili.com") || strings.Contains(s, "_p") {
-			if idx := strings.LastIndex(s, "_p"); idx > 0 {
-				if n, err := strconv.Atoi(s[idx+2:]); err == nil && n > 0 {
-					page = n
-				}
-			}
-			return "BV" + m[1][2:], 0, page, true
+	if part != "" {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 1 {
+			return "", 0, 0, false
 		}
+		page = n
 	}
-	if m := reAV.FindStringSubmatch(s); len(m) == 2 {
-		if strings.EqualFold(s, "av"+m[1]) || strings.Contains(strings.ToLower(s), "bilibili.com") {
-			if id, err := strconv.ParseInt(m[1], 10, 64); err == nil && id > 0 {
-				return "", id, page, true
-			}
-		}
+	if video := match[1]; strings.EqualFold(video[:2], "BV") {
+		return "BV" + video[2:], 0, page, true
+	} else if id, err := strconv.ParseInt(video[2:], 10, 64); err == nil && id > 0 {
+		return "", id, page, true
 	}
 	return "", 0, 0, false
 }
 
 func parseTrackID(id string) (bvid string, page int, err error) {
-	s := strings.TrimSpace(id)
-	page = 1
-	if base, suffix, ok := strings.Cut(s, "_p"); ok {
-		s = base
-		if n, perr := strconv.Atoi(suffix); perr == nil && n > 0 {
-			page = n
-		}
-	}
-	if !reBV.MatchString(s) || len(s) != 12 {
+	match := reVideoRef.FindStringSubmatch(strings.TrimSpace(id))
+	if match == nil || !strings.EqualFold(match[1][:2], "BV") {
 		return "", 0, fmt.Errorf("非法的 B 站曲目 ID %q", id)
 	}
-	return "BV" + s[2:], page, nil
+	page = 1
+	if match[2] != "" {
+		page, err = strconv.Atoi(match[2])
+		if err != nil {
+			return "", 0, fmt.Errorf("非法的 B 站分 P 曲目 ID %q", id)
+		}
+	}
+	return "BV" + match[1][2:], page, nil
 }
 
 func cleanBiliText(raw string) string {

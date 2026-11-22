@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -292,5 +294,145 @@ func TestStreamRouteDispatchesToBiliAudioProxy(t *testing.T) {
 	}
 	if proxy.lastID != "BV1xx411c7mD" || !proxy.lastLower {
 		t.Fatalf("proxy args mismatch: id=%q lower=%v", proxy.lastID, proxy.lastLower)
+	}
+}
+
+func TestAdminDefaultPasswordAndForwardedIP(t *testing.T) {
+	srv, handler, _ := newTestServer(t)
+	srv.cfg.RootPassword = config.DefaultRootPassword
+	defaultLogin := doJSON(t, handler, http.MethodPost, "/api/admin/login", map[string]string{"password": config.DefaultRootPassword})
+	if defaultLogin.Code != http.StatusServiceUnavailable || len(defaultLogin.Result().Cookies()) != 0 {
+		t.Fatalf("default root password must not open /admin: %d", defaultLogin.Code)
+	}
+	srv.cfg.RootPassword = "root-secret"
+	for i := 0; i <= loginFailMaxCount; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/login", strings.NewReader(`{"password":"wrong"}`))
+		req.RemoteAddr = "127.0.0.1:3000"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("192.0.2.%d, 198.51.100.4", i+1))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if i < loginFailMaxCount && rec.Code != http.StatusForbidden || i == loginFailMaxCount && rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("request %d with changing forwarded prefix returned %d", i+1, rec.Code)
+		}
+	}
+}
+
+func TestAdminEnvOverridesAndDeletionOfLegacyKeys(t *testing.T) {
+	srv, handler, secPath := newTestServer(t)
+	srv.cfg.Keys = map[string]string{"legacy": "from-main-config"}
+	srv.cfg.Bilibili.UseLogin = true
+	srv.meta.EnvOverrides = []string{"MUSIC_ROOT_PASSWORD", "MUSIC_BILIBILI_USE_LOGIN"}
+	login := doJSON(t, handler, http.MethodPost, "/api/admin/login", map[string]string{"password": "root-secret"})
+	cookies := login.Result().Cookies()
+	for _, test := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"/api/admin/config/auth", map[string]any{"rootPassword": "should-not-win"}},
+		{"/api/admin/config/bilibili", map[string]any{"useLogin": false}},
+	} {
+		if rec := doJSON(t, handler, http.MethodPost, test.path, test.body, cookies...); rec.Code != http.StatusConflict {
+			t.Fatalf("expected env override conflict: %s", rec.Body.String())
+		}
+	}
+	if _, exists, err := config.LoadSecrets(secPath); exists || err != nil {
+		t.Fatalf("rejected edit changed secrets: exists=%v err=%v", exists, err)
+	}
+	if rec := doJSON(t, handler, http.MethodPost, "/api/admin/config/bilibili", map[string]any{
+		"useLogin": true, "cookie": "SESSDATA=local-test",
+	}, cookies...); rec.Code != http.StatusOK {
+		t.Fatalf("write of non-overridden fields failed: %s", rec.Body.String())
+	}
+	if rec := doJSON(t, handler, http.MethodPost, "/api/admin/config/keys", map[string]any{
+		"delete": []string{"legacy"},
+	}, cookies...); rec.Code != http.StatusOK {
+		t.Fatalf("delete failed: %s", rec.Body.String())
+	}
+	sec, _, err := config.LoadSecrets(secPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterRestart := config.Config{Keys: map[string]string{" legacy ": "from-main-config"}}
+	config.ApplySecrets(&afterRestart, sec)
+	afterRestart.Normalize()
+	if len(afterRestart.Keys) != 0 || sec.Bilibili.UseLogin != nil {
+		t.Fatalf("legacy key was restored or env value was written to disk")
+	}
+}
+
+func TestAdminQRScopeAndCrossOrigin(t *testing.T) {
+	srv, handler, _ := newTestServer(t)
+	login := func() *http.Cookie {
+		return doJSON(t, handler, http.MethodPost, "/api/admin/login", map[string]string{"password": "root-secret"}).Result().Cookies()[0]
+	}
+	owner, other := login(), login()
+	create := httptest.NewRequest(http.MethodPost, "/api/admin/bilibili/qr/create", nil)
+	create.AddCookie(owner)
+	if err := srv.publishAdminQR(create, "bili", "key-a"); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/admin/bilibili/qr/poll"
+	body := map[string]string{"key": "key-a"}
+	if rec := doJSON(t, handler, http.MethodPost, path, body, other); rec.Code != http.StatusConflict {
+		t.Fatalf("another session polled the QR: %d", rec.Code)
+	}
+	if rec := doJSON(t, handler, http.MethodGet, path+"?key=key-a", nil, owner); rec.Code == http.StatusOK {
+		t.Fatal("GET must not poll a QR")
+	}
+	crossOrigin := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"key":"key-a"}`))
+	crossOrigin.AddCookie(owner)
+	crossOrigin.Header.Set("Origin", "https://other.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, crossOrigin)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin poll returned %d", rec.Code)
+	}
+	old, err := srv.beginAdminQRPoll(create, "bili", "key-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.beginAdminQRPoll(create, "bili", "key-a"); err == nil {
+		t.Fatal("parallel poll was allowed")
+	}
+	if err := srv.publishAdminQR(create, "bili", "key-b"); err != nil {
+		t.Fatal(err)
+	}
+	srv.finishAdminQRPoll("bili", old, true)
+	if _, err := srv.beginAdminQRPoll(create, "bili", "key-b"); err != nil {
+		t.Fatalf("old poll invalidated replacement QR: %v", err)
+	}
+	if rec := doJSON(t, handler, http.MethodPost, "/api/admin/config/bilibili", map[string]bool{"clearCookie": true}, owner); rec.Code != http.StatusOK {
+		t.Fatalf("clear cookie returned %d", rec.Code)
+	}
+	if _, err := srv.beginAdminQRPoll(create, "bili", "key-b"); err == nil {
+		t.Fatal("clearing Cookie should invalidate the open QR")
+	}
+}
+
+func TestAdminStorageProtectsExistingIndex(t *testing.T) {
+	srv, handler, _ := newTestServer(t)
+	srv.cfg.Storage.Accounts = []config.StorageAccount{
+		{Bucket: "shared", AccessKey: "first", SecretKey: "first-secret"},
+		{Bucket: "shared", AccessKey: "second", SecretKey: "second-secret"},
+	}
+	index := filepath.Join(srv.cfg.DataDir, "audio-cache.json")
+	if err := os.WriteFile(index, []byte(`{"version":1,"items":{"wy:123":{"account":1,"key":"audio/wy/123.mp3"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cookies := doJSON(t, handler, http.MethodPost, "/api/admin/login", map[string]string{"password": "root-secret"}).Result().Cookies()
+	first := map[string]any{"existingIndex": 0, "bucket": "shared"}
+	second := map[string]any{"existingIndex": 1, "bucket": "shared"}
+	for _, accounts := range [][]map[string]any{{second}, {second, first}} {
+		if rec := doJSON(t, handler, http.MethodPost, "/api/admin/config/storage", map[string]any{
+			"accounts": accounts,
+		}, cookies...); rec.Code != http.StatusConflict {
+			t.Fatalf("index-changing edit returned %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+	second["secretKey"] = "rotated"
+	if rec := doJSON(t, handler, http.MethodPost, "/api/admin/config/storage", map[string]any{
+		"accounts": []map[string]any{first, second},
+	}, cookies...); rec.Code != http.StatusOK {
+		t.Fatalf("in-place SecretKey update returned %d: %s", rec.Code, rec.Body.String())
 	}
 }

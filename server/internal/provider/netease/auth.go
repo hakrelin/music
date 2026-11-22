@@ -116,8 +116,8 @@ func (p *Provider) PollLoginQR(ctx context.Context, key string) (QRPollResult, e
 	case 803:
 		out.Status = "confirmed"
 		out.Cookie = formatCookies(cookies)
-		if out.Cookie == "" {
-			return out, errors.New("网易云返回登录成功但未下发 Cookie")
+		if !strings.HasPrefix(out.Cookie, "MUSIC_U=") && !strings.Contains(out.Cookie, "; MUSIC_U=") {
+			return out, errors.New("网易云返回登录成功但未下发 MUSIC_U Cookie")
 		}
 		if out.Message == "" {
 			out.Message = "网易云登录成功"

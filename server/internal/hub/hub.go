@@ -76,6 +76,7 @@ type Hub struct {
 	mu    sync.RWMutex
 	rooms map[string]*Room
 
+	settingsMu  sync.RWMutex
 	reg         *provider.Registry
 	primary     string
 	resolveMu   sync.Mutex
@@ -161,54 +162,54 @@ func buildPresets(rooms []config.RadioRoom, primary string) []Preset {
 
 // PrimaryProvider 返回实际生效的主 provider（demo 或 wy）。
 func (h *Hub) PrimaryProvider() string {
-	h.mu.RLock()
+	h.settingsMu.RLock()
 	p := h.primary
-	h.mu.RUnlock()
+	h.settingsMu.RUnlock()
 	return p
 }
 
 // SetPrimaryProvider 热切换主音乐源并同步更新电台预设。
 func (h *Hub) SetPrimaryProvider(primary string) {
-	h.mu.Lock()
+	h.settingsMu.Lock()
 	h.primary = primary
 	h.presets = buildPresets(h.radioRooms, h.primary)
-	h.mu.Unlock()
+	h.settingsMu.Unlock()
 }
 
 // UpdatePasswords 热更新服务器超管与管理员口令。
 func (h *Hub) UpdatePasswords(root, admin string) {
-	h.mu.Lock()
+	h.settingsMu.Lock()
 	h.rootPassword = root
 	h.adminPassword = admin
-	h.mu.Unlock()
+	h.settingsMu.Unlock()
 }
 
 // SetCacheCallbacks 热更新缓存预热与兜底回调。
 func (h *Hub) SetCacheCallbacks(onPlayed func(model.Track), fallbackURL func(source, id string) (string, bool)) {
-	h.mu.Lock()
+	h.settingsMu.Lock()
 	h.onPlayed = onPlayed
 	h.fallbackURL = fallbackURL
-	h.mu.Unlock()
+	h.settingsMu.Unlock()
 }
 
 func (h *Hub) passwords() (root, admin string) {
-	h.mu.RLock()
+	h.settingsMu.RLock()
 	root, admin = h.rootPassword, h.adminPassword
-	h.mu.RUnlock()
+	h.settingsMu.RUnlock()
 	return root, admin
 }
 
 func (h *Hub) fallbackURLFn() func(source, id string) (string, bool) {
-	h.mu.RLock()
+	h.settingsMu.RLock()
 	fn := h.fallbackURL
-	h.mu.RUnlock()
+	h.settingsMu.RUnlock()
 	return fn
 }
 
 // Presets 返回电台预设的副本（httpapi 用）。
 func (h *Hub) Presets() []Preset {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.settingsMu.RLock()
+	defer h.settingsMu.RUnlock()
 	out := make([]Preset, len(h.presets))
 	for i, p := range h.presets {
 		out[i] = Preset{ID: p.ID, Label: p.Label, Playlists: append([]string(nil), p.Playlists...)}
@@ -218,8 +219,8 @@ func (h *Hub) Presets() []Preset {
 
 // PresetByID 按 id 找预设。
 func (h *Hub) PresetByID(id string) (Preset, bool) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.settingsMu.RLock()
+	defer h.settingsMu.RUnlock()
 	for _, p := range h.presets {
 		if p.ID == id {
 			return Preset{ID: p.ID, Label: p.Label, Playlists: append([]string(nil), p.Playlists...)}, true
@@ -233,9 +234,9 @@ func (h *Hub) Now() int64 { return h.nowFn().UnixMilli() }
 
 // notePlayed 在曲目真正开始播放时通知外部（缓存预热），不阻塞房间状态机。
 func (h *Hub) notePlayed(t model.Track) {
-	h.mu.RLock()
+	h.settingsMu.RLock()
 	fn := h.onPlayed
-	h.mu.RUnlock()
+	h.settingsMu.RUnlock()
 	if fn == nil {
 		return
 	}

@@ -23,9 +23,10 @@ const providerTimeout = 8 * time.Second
 const urlCacheTTL = 4 * time.Minute
 
 type urlEntry struct {
-	url   string
-	cover string
-	exp   time.Time
+	url      string
+	cover    string
+	duration int
+	exp      time.Time
 }
 
 // urlCache 是"source:id → 播放地址"的简单缓存。
@@ -50,10 +51,11 @@ func (c *urlCache) get(key string) (urlEntry, bool) {
 	return e, true
 }
 
-func (c *urlCache) put(key, url, cover string) {
+func (c *urlCache) put(key string, entry urlEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.m[key] = urlEntry{url: url, cover: cover, exp: time.Now().Add(urlCacheTTL)}
+	entry.exp = time.Now().Add(urlCacheTTL)
+	c.m[key] = entry
 	// 防止极端情况下无限增长：超过 4096 条就整体清空（重新解析成本可接受）。
 	if len(c.m) > 4096 {
 		c.m = make(map[string]urlEntry)
@@ -85,17 +87,31 @@ func (h *Hub) ClearURLCache(source string) {
 	if prefix != "" {
 		prefix += ":"
 	}
+	h.resolveMu.Lock()
+	defer h.resolveMu.Unlock()
 	h.urls.mu.Lock()
+	defer h.urls.mu.Unlock()
 	if prefix == "" {
-		h.urls.m = make(map[string]urlEntry)
-	} else {
-		for k := range h.urls.m {
-			if strings.HasPrefix(k, prefix) {
-				delete(h.urls.m, k)
-			}
+		clear(h.urls.m)
+		clear(h.resolving)
+		clear(h.lastRefresh)
+		return
+	}
+	for k := range h.urls.m {
+		if strings.HasPrefix(k, prefix) {
+			delete(h.urls.m, k)
 		}
 	}
-	h.urls.mu.Unlock()
+	for k := range h.resolving {
+		if strings.HasPrefix(k, prefix) {
+			delete(h.resolving, k)
+		}
+	}
+	for k := range h.lastRefresh {
+		if strings.HasPrefix(k, prefix) {
+			delete(h.lastRefresh, k)
+		}
+	}
 }
 
 func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string, lower bool) error {
@@ -130,6 +146,9 @@ func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string
 		if t.Cover == "" {
 			t.Cover = e.cover
 		}
+		if t.Source == "bili" && e.duration > 0 {
+			t.Duration = e.duration
+		}
 		return nil
 	}
 	flight, exists := h.resolving[key]
@@ -157,11 +176,11 @@ func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string
 			}
 			// 兜底：解析失败（VIP 掉线、曲目 403、接口抽风）时，如果这首已经在
 			// 对象存储缓存里，就直接用缓存地址播——不让「已有本地副本」的歌被跳过。
-			if err != nil {
+			if err != nil && (ok || cp.Source != "bili") {
 				if fallback := h.fallbackURLFn(); fallback != nil {
 					if cached, ok := fallback(cp.Source, cp.ID); ok && strings.TrimSpace(cached) != "" {
 						h.log.Warn("播放地址解析失败，改用缓存地址兜底",
-							"source", cp.Source, "track", cp.ID, "err", err.Error(), "url", cached)
+							"source", cp.Source, "track", cp.ID, "err", err.Error())
 						cp.URL = cached
 						err = nil
 					}
@@ -170,12 +189,16 @@ func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string
 			h.log.Info("播放地址解析完成", "source", cp.Source, "track", cp.ID, "lower", lower, "elapsedMs", time.Since(resolveStarted).Milliseconds(), "ok", err == nil)
 			h.resolveMu.Lock()
 			if err == nil {
-				h.urls.put(key, cp.URL, cp.Cover)
-				flight.entry = urlEntry{url: cp.URL, cover: cp.Cover}
+				flight.entry = urlEntry{url: cp.URL, cover: cp.Cover, duration: cp.Duration}
 				flight.detail = cp
 			}
 			flight.err = err
-			delete(h.resolving, key)
+			if h.resolving[key] == flight {
+				if err == nil {
+					h.urls.put(key, flight.entry)
+				}
+				delete(h.resolving, key)
+			}
 			close(flight.done)
 			h.resolveMu.Unlock()
 		}()
@@ -199,7 +222,7 @@ func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string
 	if t.Album == "" {
 		t.Album = flight.detail.Album
 	}
-	if t.Duration <= 0 {
+	if t.Duration <= 0 || (t.Source == "bili" && flight.detail.Duration > 0) {
 		t.Duration = flight.detail.Duration
 	}
 	if t.Cover == "" {

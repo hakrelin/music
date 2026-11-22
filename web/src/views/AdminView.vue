@@ -32,6 +32,7 @@ const wyQR = ref<QRCreateResp | null>(null);
 const wyQRState = ref('');
 const wyQRHint = ref('');
 let wyPollTimer = 0;
+let wyQRRequest: AbortController | undefined;
 
 /* ——— B 站状态 & 扫码 ——— */
 const biliStatus = ref<BiliAccountStatus | null>(null);
@@ -44,6 +45,7 @@ const biliQR = ref<QRCreateResp | null>(null);
 const biliQRState = ref('');
 const biliQRHint = ref('');
 let biliPollTimer = 0;
+let biliQRRequest: AbortController | undefined;
 
 /* ——— 对象存储 ——— */
 interface StorageDraftAccount {
@@ -78,15 +80,19 @@ const authForm = reactive({
 const authSaving = ref(false);
 
 function stopWyPoll() {
+  wyQRRequest?.abort();
+  wyQRRequest = undefined;
   if (wyPollTimer) {
-    window.clearInterval(wyPollTimer);
+    window.clearTimeout(wyPollTimer);
     wyPollTimer = 0;
   }
 }
 
 function stopBiliPoll() {
+  biliQRRequest?.abort();
+  biliQRRequest = undefined;
   if (biliPollTimer) {
-    window.clearInterval(biliPollTimer);
+    window.clearTimeout(biliPollTimer);
     biliPollTimer = 0;
   }
 }
@@ -188,26 +194,31 @@ async function refreshWyStatus() {
 
 async function startWyQR() {
   stopWyPoll();
+  const request = new AbortController();
+  wyQRRequest = request;
   wyQR.value = null;
   wyQRState.value = 'loading';
   wyQRHint.value = '正在生成网易云二维码…';
   try {
-    const qr = await adminApi.neteaseQRCreate();
+    const qr = await adminApi.neteaseQRCreate(request.signal);
+    if (request.signal.aborted) return;
     wyQR.value = qr;
     wyQRState.value = 'waiting';
     wyQRHint.value = '请使用网易云音乐 App 扫描二维码';
-    wyPollTimer = window.setInterval(() => void pollWyQR(qr.key), 2200);
+    wyPollTimer = window.setTimeout(() => void pollWyQR(qr.key, request), 2200);
   } catch (e) {
+    if (request.signal.aborted) return;
     wyQRState.value = 'error';
     wyQRHint.value = e instanceof Error ? e.message : '生成二维码失败';
     ui.error(wyQRHint.value);
   }
 }
 
-async function pollWyQR(key: string) {
-  if (!wyQR.value || wyQR.value.key !== key) return;
+async function pollWyQR(key: string, request: AbortController) {
+  if (request.signal.aborted) return;
   try {
-    const res = await adminApi.neteaseQRPoll(key);
+    const res = await adminApi.neteaseQRPoll(key, request.signal);
+    if (request.signal.aborted) return;
     wyQRState.value = res.status;
     wyQRHint.value =
       res.status === 'scanned' && res.nickname
@@ -221,8 +232,11 @@ async function pollWyQR(key: string) {
       void refreshWyStatus();
     } else if (res.status === 'expired') {
       stopWyPoll();
+    } else {
+      wyPollTimer = window.setTimeout(() => void pollWyQR(key, request), 2200);
     }
   } catch (e) {
+    if (request.signal.aborted) return;
     stopWyPoll();
     wyQRState.value = 'error';
     wyQRHint.value = e instanceof Error ? e.message : '轮询扫码状态失败';
@@ -233,6 +247,9 @@ async function saveWyCookie(clear = false) {
   if (!clear && !wyCookieInput.value.trim()) {
     return ui.warn('请先粘贴网易云 Cookie');
   }
+  stopWyPoll();
+  wyQR.value = null;
+  wyQRHint.value = '';
   wySaving.value = true;
   try {
     const res = await adminApi.saveNetease(clear ? { clear: true } : { cookie: wyCookieInput.value });
@@ -261,26 +278,31 @@ async function refreshBiliStatus() {
 
 async function startBiliQR() {
   stopBiliPoll();
+  const request = new AbortController();
+  biliQRRequest = request;
   biliQR.value = null;
   biliQRState.value = 'loading';
   biliQRHint.value = '正在生成 B 站二维码…';
   try {
-    const qr = await adminApi.biliQRCreate();
+    const qr = await adminApi.biliQRCreate(request.signal);
+    if (request.signal.aborted) return;
     biliQR.value = qr;
     biliQRState.value = 'waiting';
     biliQRHint.value = '请使用哔哩哔哩 App 扫描二维码';
-    biliPollTimer = window.setInterval(() => void pollBiliQR(qr.key), 2200);
+    biliPollTimer = window.setTimeout(() => void pollBiliQR(qr.key, request), 2200);
   } catch (e) {
+    if (request.signal.aborted) return;
     biliQRState.value = 'error';
     biliQRHint.value = e instanceof Error ? e.message : '生成二维码失败';
     ui.error(biliQRHint.value);
   }
 }
 
-async function pollBiliQR(key: string) {
-  if (!biliQR.value || biliQR.value.key !== key) return;
+async function pollBiliQR(key: string, request: AbortController) {
+  if (request.signal.aborted) return;
   try {
-    const res = await adminApi.biliQRPoll(key);
+    const res = await adminApi.biliQRPoll(key, request.signal);
+    if (request.signal.aborted) return;
     biliQRState.value = res.status;
     biliQRHint.value = res.message;
     if (res.status === 'confirmed') {
@@ -291,8 +313,11 @@ async function pollBiliQR(key: string) {
       void refreshBiliStatus();
     } else if (res.status === 'expired') {
       stopBiliPoll();
+    } else {
+      biliPollTimer = window.setTimeout(() => void pollBiliQR(key, request), 2200);
     }
   } catch (e) {
+    if (request.signal.aborted) return;
     stopBiliPoll();
     biliQRState.value = 'error';
     biliQRHint.value = e instanceof Error ? e.message : '轮询扫码状态失败';
@@ -300,6 +325,11 @@ async function pollBiliQR(key: string) {
 }
 
 async function saveBiliConfig(clearCookie = false) {
+  if (clearCookie || biliCookieInput.value.trim()) {
+    stopBiliPoll();
+    biliQR.value = null;
+    biliQRHint.value = '';
+  }
   biliSaving.value = true;
   try {
     const res = await adminApi.saveBilibili({
@@ -762,7 +792,7 @@ onBeforeUnmount(() => {
           </div>
 
           <p class="notice-banner">
-            注意：缓存索引按账号序号（#0、#1…）引用存储桶，调整已有账号顺序或删除已有账号可能导致已缓存曲目失效；编辑已有账号时 <code>AccessKey</code> / <code>SecretKey</code> 留空会保持原密钥不变。
+            注意：缓存索引按账号序号（#0、#1…）引用存储桶，缓存启用或已有索引时，可在末尾添加账号。已有账号须保留序号、<code>AccessKey</code> 和存储空间；编辑时密钥留空会沿用已保存的值。
           </p>
 
           <div v-if="cfg.cacheStats.enabled && cfg.cacheStats.accounts?.length" class="cache-strip">

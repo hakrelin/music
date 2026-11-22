@@ -50,8 +50,9 @@ export function forgetMediaUrl(original: string) {
  * 没缓存就 302 到它自己挑的健康 CDN 节点。浏览器只跟自己的域名打交道，
  * 因此不受网易云节点风控、签名过期、Referer 策略影响。
  */
-export function streamFallbackUrl(track: { id: string; source?: string } | null): string {
+export function streamFallbackUrl(track: { id: string; source?: string } | null, lower = false): string {
   if (!track?.id) return '';
   const source = track.source || 'wy';
-  return `/api/stream/${encodeURIComponent(track.id)}?source=${encodeURIComponent(source)}`;
+  const quality = lower && source === 'bili' ? '&lower=1' : '';
+  return `/api/stream/${encodeURIComponent(track.id)}?source=${encodeURIComponent(source)}${quality}`;
 }

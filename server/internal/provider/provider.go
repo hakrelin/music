@@ -113,5 +113,5 @@ type StreamProxyProvider interface {
 
 // UpstreamAudioResolver 是可选能力：解析真实上游音频地址（供对象存储缓存预热下载用）。
 type UpstreamAudioResolver interface {
-	ResolveUpstreamAudio(ctx context.Context, id string, lower bool) (string, error)
+	ResolveUpstreamAudio(ctx context.Context, id string, lower bool) ([]string, error)
 }

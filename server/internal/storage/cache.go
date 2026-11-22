@@ -30,7 +30,7 @@ const (
 type DownloadFunc func(ctx context.Context, source, rawURL string, limit int64) (data []byte, truncated bool, err error)
 
 // Resolver 解析一首歌的播放地址（缓存预热用 128k 版本，体积才压得进 10MB）。
-type Resolver func(ctx context.Context, source, id string) (string, error)
+type Resolver func(ctx context.Context, source, id string) ([]string, error)
 
 // Options 构造 Cache。
 type Options struct {
@@ -72,7 +72,10 @@ type Cache struct {
 
 	dirty     bool
 	saveSig   chan struct{}
-	done      chan struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	saverDone chan struct{}
+	workers   sync.WaitGroup
 	closeOnce sync.Once
 }
 
@@ -100,14 +103,14 @@ func New(opts Options) *Cache {
 		opts.MinHits = 2
 	}
 	c := &Cache{
-		opts:     opts,
-		log:      opts.Logger,
-		hc:       &http.Client{Timeout: 60 * time.Second},
-		fillSem:  make(chan struct{}, 1),
-		items:    make(map[string]*Item),
-		inflight: make(map[string]bool),
-		saveSig:  make(chan struct{}, 1),
-		done:     make(chan struct{}),
+		opts:      opts,
+		log:       opts.Logger,
+		hc:        &http.Client{Timeout: 60 * time.Second},
+		fillSem:   make(chan struct{}, 1),
+		items:     make(map[string]*Item),
+		inflight:  make(map[string]bool),
+		saveSig:   make(chan struct{}, 1),
+		saverDone: make(chan struct{}),
 	}
 	for _, acc := range opts.Accounts {
 		if acc.AK == "" || acc.SK == "" || acc.Bucket == "" {
@@ -125,6 +128,7 @@ func New(opts Options) *Cache {
 	if len(c.accounts) == 0 {
 		return nil
 	}
+	c.ctx, c.cancel = context.WithCancel(context.Background())
 	c.load()
 	go c.saver()
 	return c
@@ -165,6 +169,10 @@ func (c *Cache) Lookup(source, id string) (string, bool) {
 	}
 	ik := itemKey(source, id)
 	c.mu.Lock()
+	if c.ctx.Err() != nil {
+		c.mu.Unlock()
+		return "", false
+	}
 	it, ok := c.items[ik]
 	if ok {
 		it.Hits++
@@ -183,7 +191,7 @@ func (c *Cache) Lookup(source, id string) (string, bool) {
 	if idx < 0 || idx >= len(c.accounts) {
 		return "", false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(c.ctx, 15*time.Second)
 	defer cancel()
 	u, err := c.accounts[idx].presign(ctx, objKey)
 	if err != nil {
@@ -218,14 +226,16 @@ func (c *Cache) Ensure(source, id string, resolve Resolver) {
 		c.mu.Unlock()
 		return
 	}
-	if c.inflight[ik] {
+	if c.ctx.Err() != nil || c.inflight[ik] || len(c.inflight) >= 64 {
 		c.mu.Unlock()
 		return
 	}
 	c.inflight[ik] = true
+	c.workers.Add(1)
 	c.mu.Unlock()
 
 	go func() {
+		defer c.workers.Done()
 		defer func() {
 			c.mu.Lock()
 			delete(c.inflight, ik)
@@ -233,6 +243,8 @@ func (c *Cache) Ensure(source, id string, resolve Resolver) {
 		}()
 		select {
 		case c.fillSem <- struct{}{}:
+		case <-c.ctx.Done():
+			return
 		case <-time.After(2 * time.Minute):
 			return
 		}
@@ -244,25 +256,27 @@ func (c *Cache) Ensure(source, id string, resolve Resolver) {
 // fill 是一次完整的预热：解析 128k 地址 → 下载 → 上传到对象存储 → 记索引。
 func (c *Cache) fill(source, id string, resolve Resolver) {
 	started := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(c.ctx, 3*time.Minute)
 	defer cancel()
 
-	url, err := resolve(ctx, source, id)
-	if err != nil || url == "" {
+	urls, err := resolve(ctx, source, id)
+	if err != nil || len(urls) == 0 {
 		c.log.Warn("缓存预热：解析播放地址失败", "track", id, "err", err)
 		return
 	}
-	data, truncated, err := c.opts.Download(ctx, source, url, maxUploadBytes)
-	if err != nil {
-		c.log.Warn("缓存预热：下载失败", "track", id, "err", err)
-		return
-	}
-	if truncated {
-		c.log.Info("缓存预热：文件超过 10MB，跳过缓存", "track", id)
-		return
+	var data []byte
+	for _, candidate := range urls {
+		if candidate == "" || ctx.Err() != nil {
+			continue
+		}
+		body, truncated, err := c.opts.Download(ctx, source, candidate, maxUploadBytes)
+		if err == nil && !truncated && len(body) != 0 {
+			data = body
+			break
+		}
 	}
 	if len(data) == 0 {
-		c.log.Warn("缓存预热：下载到 0 字节", "track", id)
+		c.log.Info("缓存预热：未找到可下载且符合大小限制的音频", "track", id)
 		return
 	}
 
@@ -393,16 +407,15 @@ func (c *Cache) markDirtyLocked() {
 
 // saver 把索引防抖落盘：3 秒内多次变更只写一次；关闭前刷盘退出。
 func (c *Cache) saver() {
+	defer close(c.saverDone)
 	for {
 		select {
-		case <-c.done:
-			c.flush()
+		case <-c.ctx.Done():
 			return
 		case <-c.saveSig:
 		}
 		select {
-		case <-c.done:
-			c.flush()
+		case <-c.ctx.Done():
 			return
 		case <-time.After(saveDebounce):
 		}
@@ -432,7 +445,11 @@ func (c *Cache) Close() {
 		return
 	}
 	c.closeOnce.Do(func() {
-		close(c.done)
+		c.mu.Lock()
+		c.cancel()
+		c.mu.Unlock()
+		c.workers.Wait()
+		<-c.saverDone
 		c.flush()
 	})
 }
@@ -463,20 +480,29 @@ func (c *Cache) writeIndex(items map[string]*Item) {
 // ---------- 淘汰 ----------
 
 // Run 起一个每日巡检：按时间和容量淘汰旧对象，避免桶无限增长。
-func (c *Cache) Run(ctx context.Context) {
+func (c *Cache) Run(parent context.Context) {
 	if !c.Enabled() {
 		return
 	}
-	// 启动后先跑一次，之后每天一次（月初清量最大，和「每月淘汰一部分」一致）。
+	c.mu.Lock()
+	if c.ctx.Err() != nil {
+		c.mu.Unlock()
+		return
+	}
+	c.workers.Add(1)
+	c.mu.Unlock()
 	go func() {
+		defer c.workers.Done()
+		ctx, cancel := context.WithCancel(c.ctx)
+		defer cancel()
+		stop := context.AfterFunc(parent, cancel)
+		defer stop()
 		c.Evict(ctx)
 		t := time.NewTicker(24 * time.Hour)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
-				return
-			case <-c.done:
 				return
 			case <-t.C:
 				c.Evict(ctx)
@@ -541,7 +567,7 @@ func (c *Cache) Evict(ctx context.Context) {
 				}
 				return list[i].it.Access < list[j].it.Access
 			})
-			target := c.opts.MaxBytesPerAccount * 9 / 10
+			target := c.opts.MaxBytesPerAccount / 10 * 9
 			for _, e := range list {
 				if sum <= target {
 					break
@@ -559,7 +585,7 @@ func (c *Cache) Evict(ctx context.Context) {
 }
 
 func (c *Cache) deleteItem(ctx context.Context, ik string, it Item) bool {
-	if it.Account < 0 || it.Account >= len(c.accounts) {
+	if ctx.Err() != nil || it.Account < 0 || it.Account >= len(c.accounts) {
 		return false
 	}
 	acc := c.accounts[it.Account]
@@ -633,18 +659,15 @@ func (h *Holder) Get() *Cache {
 	return c
 }
 
-// Swap 替换当前 Cache，并优雅关闭旧实例。
-func (h *Holder) Swap(next *Cache) {
+// Replace 先停止旧缓存并刷盘，然后才从索引构造新缓存。
+func (h *Holder) Replace(build func() *Cache) {
 	if h == nil {
 		return
 	}
 	h.mu.Lock()
-	old := h.cache
-	h.cache = next
-	h.mu.Unlock()
-	if old != nil && old != next {
-		old.Close()
-	}
+	defer h.mu.Unlock()
+	h.cache.Close()
+	h.cache = build()
 }
 
 func (h *Holder) Enabled() bool {
@@ -675,5 +698,5 @@ func (h *Holder) Stats() map[string]any {
 }
 
 func (h *Holder) Close() {
-	h.Swap(nil)
+	h.Replace(func() *Cache { return nil })
 }

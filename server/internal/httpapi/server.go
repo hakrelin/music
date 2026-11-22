@@ -50,7 +50,8 @@ type Server struct {
 
 	adminMu       sync.Mutex
 	adminSessions map[string]time.Time
-	loginFails    map[string][]time.Time
+	loginFails    map[string]loginAttempts
+	adminQRs      map[string]*adminQR // 由 cfgMu 保护
 }
 
 // Options 构造 Server。
@@ -108,7 +109,8 @@ func New(opts Options) *Server {
 		log:           logger,
 		static:        webui.FS(),
 		adminSessions: make(map[string]time.Time),
-		loginFails:    make(map[string][]time.Time),
+		loginFails:    make(map[string]loginAttempts),
+		adminQRs:      make(map[string]*adminQR),
 	}
 }
 
@@ -148,7 +150,12 @@ func (s *Server) Handler() http.Handler {
 
 // withCommonHeaders 给所有响应加上安全/编码相关的头。
 func withCommonHeaders(next http.Handler) http.Handler {
+	var origins http.CrossOriginProtection
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/admin/") && origins.Check(r) != nil {
+			writeError(w, http.StatusForbidden, "cross_origin", "管理操作必须来自本站")
+			return
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
@@ -197,13 +204,13 @@ type configOut struct {
 
 func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 	s.cfgMu.RLock()
-	site := siteOut{Name: s.cfg.Site.Name, Tagline: s.cfg.Site.Tagline}
-	s.cfgMu.RUnlock()
-	writeJSON(w, http.StatusOK, configOut{
-		Site:         site,
+	out := configOut{
+		Site:         siteOut{Name: s.cfg.Site.Name, Tagline: s.cfg.Site.Tagline},
 		Sources:      s.sources(),
 		RadioPresets: s.hub.Presets(),
-	})
+	}
+	s.cfgMu.RUnlock()
+	writeJSON(w, http.StatusOK, out)
 }
 
 // sources 列出前端点歌面板可选的音乐源。
@@ -337,6 +344,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// 302 的目标随时会变（预签名/签名都有有效期），禁止中间层缓存这次跳转。
 	w.Header().Set("Cache-Control", "no-store")
 
+	p, ok := s.reg.For(source)
+	if source == "bili" && !ok {
+		writeError(w, http.StatusNotFound, "unknown_source", "未知音乐源："+source)
+		return
+	}
 	if s.cache != nil {
 		if u, ok := s.cache.Lookup(source, id); ok {
 			w.Header().Set("X-Cache", "hit")
@@ -345,7 +357,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	p, ok := s.reg.For(source)
 	if !ok {
 		writeError(w, http.StatusNotFound, "unknown_source", "未知音乐源："+source)
 		return

@@ -72,7 +72,8 @@ func TestSearchResolveAudioOnlyAndRangeProxy(t *testing.T) {
 				`{"id":30232,"baseUrl":"` + srvURL + `/cdn/audio132.m4s","bandwidth":132000,"codecs":"mp4a.40.2"}` +
 				`]}}}`))
 		case "/cdn/audio192-bad.m4s":
-			w.WriteHeader(http.StatusForbidden)
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html>unexpected response</html>"))
 		case "/cdn/audio192-ok.m4s", "/cdn/audio132.m4s":
 			if r.Header.Get("Referer") != "https://www.bilibili.com/" {
 				w.WriteHeader(http.StatusForbidden)
@@ -80,6 +81,11 @@ func TestSearchResolveAudioOnlyAndRangeProxy(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.Header().Set("Accept-Ranges", "bytes")
+			if r.Header.Get("Range") == "bytes=100-" {
+				w.Header().Set("Content-Range", "bytes */62")
+				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+				return
+			}
 			if r.Header.Get("Range") == "bytes=0-9" {
 				w.Header().Set("Content-Range", "bytes 0-9/62")
 				w.WriteHeader(http.StatusPartialContent)
@@ -116,6 +122,14 @@ func TestSearchResolveAudioOnlyAndRangeProxy(t *testing.T) {
 		t.Fatalf("direct BV multi-P search mismatch: err=%v total=%d parts=%+v", err, ptotal, parts)
 	}
 
+	if _, _, err := p.Search(ctx, "BV1xx411c7mD_p3", 1, 10); err == nil {
+		t.Fatal("a nonexistent part must not silently fall back to P1")
+	}
+	late, total, err := p.Search(ctx, "BV1xx411c7mD_p2", int(^uint(0)>>1), 30)
+	if err != nil || len(late) != 0 || total != 2 {
+		t.Fatalf("out-of-range search page: len=%d total=%d err=%v", len(late), total, err)
+	}
+
 	// Resolve 仅抽音频并返回 /api/stream/{id}?source=bili
 	if err := p.Resolve(ctx, &tr); err != nil {
 		t.Fatalf("Resolve failed: %v", err)
@@ -125,9 +139,9 @@ func TestSearchResolveAudioOnlyAndRangeProxy(t *testing.T) {
 	}
 
 	// lower=true 应选 132k 音频轨道（用于缓存/降码率）
-	lowURL, err := p.ResolveUpstreamAudio(ctx, "BV1xx411c7mD", true)
-	if err != nil || !strings.HasSuffix(lowURL, "/cdn/audio132.m4s") {
-		t.Fatalf("lower=true should pick 30232 (132k), got %q err=%v", lowURL, err)
+	lowURLs, err := p.ResolveUpstreamAudio(ctx, "BV1xx411c7mD", true)
+	if err != nil || len(lowURLs) == 0 || !strings.HasSuffix(lowURLs[0], "/cdn/audio132.m4s") {
+		t.Fatalf("lower=true should pick 30232 (132k), got %q err=%v", lowURLs, err)
 	}
 
 	// ServeAudio 应自动从 403 主地址回退到 backupUrl，并正确映射 Content-Type: audio/mp4 与 206 Range
@@ -145,6 +159,15 @@ func TestSearchResolveAudioOnlyAndRangeProxy(t *testing.T) {
 	}
 	if rec.Body.String() != "0123456789" {
 		t.Fatalf("unexpected range body: %q", rec.Body.String())
+	}
+
+	badRange := httptest.NewRequest(http.MethodGet, "/api/stream/BV1xx411c7mD?source=bili", nil)
+	badRange.Header.Set("Range", "bytes=100-")
+	rangeResp := httptest.NewRecorder()
+	if !p.ServeAudio(rangeResp, badRange, "BV1xx411c7mD", false) ||
+		rangeResp.Code != http.StatusRequestedRangeNotSatisfiable ||
+		rangeResp.Header().Get("Content-Range") != "bytes */62" {
+		t.Fatalf("unexpected invalid range response: %d %v", rangeResp.Code, rangeResp.Header())
 	}
 
 	// 账号登录态校验
@@ -207,5 +230,16 @@ func TestBiliQRLoginFlow(t *testing.T) {
 	}
 	if r4, err := p.PollLoginQR(ctx, qr.Key); err != nil || r4.Status != "expired" {
 		t.Fatalf("step4 want expired, got %+v err=%v", r4, err)
+	}
+}
+
+func TestSelectAudioURLsSkipsNonAAC(t *testing.T) {
+	urls := selectAudioURLs([]dashAudioItem{
+		{ID: 30280, Codecs: "ec-3", BaseURL: "https://example.invalid/dolby"},
+		{ID: 30250, Codecs: "fLaC", BaseURL: "https://example.invalid/flac"},
+		{ID: 30216, Codecs: "mp4a.40.2", BaseURL: "https://example.invalid/aac"},
+	}, false)
+	if len(urls) != 1 || urls[0] != "https://example.invalid/aac" {
+		t.Fatalf("unexpected audio candidates: %v", urls)
 	}
 }

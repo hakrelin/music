@@ -54,8 +54,8 @@ type Room struct {
 	banSwitch bool // 禁切歌/投票
 	volume    int
 
-	likes         map[string]int
-	likeVotes     map[string]map[string]struct{}
+	likes     map[string]int
+	likeVotes map[string]map[string]struct{}
 	// likeVotes: trackID -> 点过赞的 session 集合，保证每人每首只能赞一次
 	removeVotes   map[string]map[string]struct{}
 	ownerPassword string
@@ -491,7 +491,7 @@ func (r *Room) doAdvance(reason string) {
 			if cand.Cover == "" {
 				cand.Cover = r.prepared.Cover
 			}
-			if cand.Duration <= 0 {
+			if cand.Duration <= 0 || (cand.Source == "bili" && r.prepared.Duration > 0) {
 				cand.Duration = r.prepared.Duration
 			}
 		}
@@ -685,9 +685,6 @@ func (r *Room) pick(c *Client, t model.Track) (string, string) {
 	if len(r.queue) >= queueLimit {
 		r.mu.Unlock()
 		return "queue_full", "队列已满"
-	}
-	if t.Source == "" {
-		t.Source = r.hub.PrimaryProvider()
 	}
 	t.QueueID = crand.Text()
 	t.Nick = c.nick
