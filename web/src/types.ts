@@ -108,3 +108,112 @@ export interface PlaylistSearchResult {
   playlists: Playlist[];
   total: number;
 }
+
+export interface AdminSessionInfo {
+  authenticated: boolean;
+  version: string;
+  secretsFile?: string;
+  secretsWritable?: boolean;
+  configFiles?: string[];
+  envOverrides?: string[];
+}
+
+export interface AdminStorageAccount {
+  index: number;
+  label: string;
+  bucket: string;
+  publicBase: string;
+  accessKeyMasked: string;
+  hasAccessKey: boolean;
+  secretKeyMasked: string;
+  hasSecretKey: boolean;
+}
+
+export interface AdminCustomKey {
+  key: string;
+  masked: string;
+  length: number;
+}
+
+export interface AdminCacheStats {
+  enabled: boolean;
+  items?: number;
+  hits?: number;
+  inflight?: number;
+  accounts?: { label: string; bucket: string; items: number; bytes: number }[];
+}
+
+export interface AdminConfigSnapshot {
+  version: string;
+  secretsFile: string;
+  secretsExists: boolean;
+  secretsWritable: boolean;
+  configFiles: string[];
+  envOverrides: string[];
+  providerMode: string;
+  primaryProvider: string;
+  sources: { id: string; label: string }[];
+  auth: {
+    rootPasswordSet: boolean;
+    adminPasswordSet: boolean;
+  };
+  netease: {
+    configured: boolean;
+    cookieMasked: string;
+    cookieKeys: string[];
+  };
+  bilibili: {
+    enabled: boolean;
+    useLogin: boolean;
+    configured: boolean;
+    cookieMasked: string;
+    cookieKeys: string[];
+  };
+  storage: {
+    enabled: boolean;
+    maxMBPerAccount: number;
+    evictAfterDays: number;
+    minHits: number;
+    accounts: AdminStorageAccount[];
+  };
+  keys: AdminCustomKey[];
+  cacheStats: AdminCacheStats;
+}
+
+export interface NeteaseAccountStatus {
+  configured: boolean;
+  loggedIn: boolean;
+  uid?: string;
+  nickname?: string;
+  avatar?: string;
+  vipType?: number;
+  message?: string;
+}
+
+export interface BiliAccountStatus {
+  configured: boolean;
+  useLogin: boolean;
+  loggedIn: boolean;
+  uid?: string;
+  username?: string;
+  face?: string;
+  vipStatus?: number;
+  vipLabel?: string;
+  message?: string;
+}
+
+export interface QRCreateResp {
+  key: string;
+  url: string;
+  qrSvgDataUrl: string;
+}
+
+export interface QRPollResp {
+  status: 'waiting' | 'scanned' | 'confirmed' | 'expired';
+  code: number;
+  message: string;
+  nickname?: string;
+  avatar?: string;
+  saved?: boolean;
+  config?: AdminConfigSnapshot;
+}

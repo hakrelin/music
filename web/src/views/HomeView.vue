@@ -194,6 +194,7 @@ async function createRoom() {
         </p>
       </section>
       <SiteFooter
+        ><RouterLink class="about-link" to="/admin">管理后台</RouterLink
         ><button class="about-link" @click="aboutOpen = true">关于本站</button></SiteFooter
       >
     </main>

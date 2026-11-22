@@ -20,8 +20,9 @@
 
 - 大厅第一屏直接展示常驻电台；房间可按类型筛选、按名称或当前歌曲搜索。
 - 灵梦与魔理沙双人主视觉，暖白与茶绿界面，图片来源可在关于弹窗和素材清单中查看。
-- 桌面队列与聊天可独立收起；封面可隐藏，歌词随剩余空间展开，显示偏好会在本机保存。底部持续显示播放控制，手机面板各自滚动，切换时保持收听。
-- 搜索点歌、按歌单关键词 / ID / 分享链接找歌、按用户昵称打开公开歌单逐首点播；点歌成功与失败均有弹窗内可见提示。
+- 桌面队列与聊天可独立收起；主播放区默认无大封面（可按需点击「显示封面」展开，底栏与队列保留缩略图），歌词优先占满空间，显示偏好会在本机保存。底部持续显示播放控制，手机面板各自滚动，切换时保持收听。
+- 搜索点歌支持网易云音乐与哔哩哔哩（B 站只抽取 DASH 纯音频流播放，支持关键词、BV/AV 号与分 P 链接，默认使用显式配置的登录态 Cookie）；同时支持按歌单关键词 / ID / 分享链接找歌、按用户昵称打开公开歌单逐首点播；点歌成功与失败均有弹窗内可见提示。
+- 内置服务器管理后台（`/admin`，使用 `rootPassword` 登录），支持网易云与 B 站扫码登录、显式 Cookie 配置、多吉云对象存储密钥、自定义 Key 与管理口令管理，修改后原子写入独立密钥配置文件（`secrets.json`，权限 `0600`）并热生效。
 - 批量点歌、电台预设、投票切歌、待播歌曲投票删除、点赞、音量和管理员设置。
 - 创建者自动获得本房房主权限，可自行设置或修改房间管理密码；服务器口令可管理全部房间和电台。
 - 昵称跨房间保存，密码房创建后直接加入，分享地址不包含密码。
@@ -66,23 +67,33 @@ VITE_MOCK=1 npm --prefix web run dev
 
 ---
 
-## 接真实的网易云
+## 接真实的网易云与 B 站（独立密钥配置）
 
-在仓库根目录创建 `server/config.local.json`（**已在 .gitignore 中，不会入库**）：
+敏感凭据（网易云 / B 站 Cookie、多吉云对象存储密钥、管理员口令、自定义 Key）统一由独立密钥配置文件管理（示例模板见 `server/secrets.example.json`），**禁止入库**：
+
+- 路径优先级：`MUSIC_SECRETS_FILE` → 主配置 `secretsFile` → `<dataDir>/secrets.json`（systemd 部署下 `/var/lib/musicd/secrets.json` 可写）→ 本地开发 `server/secrets.local.json`。
+- 既可直接编辑该文件，也可以直接打开 `/admin` 管理后台，使用服务器 `rootPassword` 登录后扫码登录网易云 / B 站或粘贴显式 Cookie 与各类 Key（自动以 `0600` 权限落盘并热生效）。
+- B 站音源默认启用且默认使用登录态（`bilibili.useLogin = true`），需显式配置含 `SESSDATA` 的 Cookie（或在 `/admin` 扫码登录）。
+
+兼容既有 `server/config.local.json`（**已在 .gitignore 中，不会入库**）写法：
 
 ```json
 {
   "neteaseCookie": "MUSIC_U=...; __csrf=...",
+  "bilibili": {
+    "enabled": true,
+    "useLogin": true,
+    "cookie": "SESSDATA=...; bili_jct=...; DedeUserID=..."
+  },
   "provider": "auto"
 }
 ```
 
-Cookie 获取：浏览器登录 <https://music.163.com> → DevTools → Application → Cookies →
-`https://music.163.com` → 复制 `MUSIC_U`（以及 `__csrf` 如果有）。
-`provider: "auto"` 时有 cookie 就用网易云（`wy`），没有就用 demo。
+Cookie 获取：浏览器登录 <https://music.163.com> 或 <https://www.bilibili.com>（或直接在 `/admin` 扫码登录）。
+`provider: "auto"` 时有网易云 cookie 就用网易云（`wy`），没有就用 demo；B 站（`bili`）作为附加音源在「搜索点歌」中切换。
 VIP 账号才能拿到 320k 地址；普通账号/无版权曲目会在播放时被跳过并提示。
 
-也可以全部用环境变量覆盖：`MUSIC_HTTP_ADDR`、`MUSIC_NETEASE_COOKIE`、`MUSIC_PROVIDER`、
+也可以全部用环境变量覆盖：`MUSIC_HTTP_ADDR`、`MUSIC_NETEASE_COOKIE`、`MUSIC_BILIBILI_COOKIE`、`MUSIC_BILIBILI_ENABLED`、`MUSIC_BILIBILI_USE_LOGIN`、`MUSIC_SECRETS_FILE`、`MUSIC_PROVIDER`、
 `MUSIC_DATA_DIR`、`MUSIC_ROOT_PASSWORD`、`MUSIC_ADMIN_PASSWORD`、`MUSIC_LOG_LEVEL`、`MUSIC_CONFIG`。
 
 > 示例配置里的默认口令（`654321` / `123456`）部署前务必改掉。

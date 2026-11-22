@@ -581,7 +581,7 @@ func (r *Room) refillRadio() {
 	if len(ids) > 0 {
 		order := rand.Perm(len(ids))
 		for i := 0; i < len(order) && i < 3; i++ {
-			_, ts, err := r.hub.playlistTracks(context.Background(), r.hub.primary, ids[order[i]])
+			_, ts, err := r.hub.playlistTracks(context.Background(), r.hub.PrimaryProvider(), ids[order[i]])
 			if err != nil || len(ts) == 0 {
 				r.hub.log.Warn("电台歌单拉取失败", "room", r.id, "playlist", ids[order[i]], "err", err)
 				continue
@@ -651,7 +651,7 @@ func (r *Room) pick(c *Client, t model.Track) (string, string) {
 	}
 
 	if t.Source == "" {
-		t.Source = r.hub.primary
+		t.Source = r.hub.PrimaryProvider()
 	}
 	// 时长兜底：搜索接口偶尔给不出 duration，点歌时按 ID 补一次，
 	// 否则队列显示 00:00、自动切歌也会按 300 秒误判。
@@ -687,7 +687,7 @@ func (r *Room) pick(c *Client, t model.Track) (string, string) {
 		return "queue_full", "队列已满"
 	}
 	if t.Source == "" {
-		t.Source = r.hub.primary
+		t.Source = r.hub.PrimaryProvider()
 	}
 	t.QueueID = crand.Text()
 	t.Nick = c.nick

@@ -4,6 +4,7 @@ import Icon from '@/components/Icon.vue';
 import { useRoomStore } from '@/stores/room';
 import { useRoomsStore } from '@/stores/rooms';
 import { useUiStore } from '@/stores/ui';
+import { formatTime } from '@/utils/lyric';
 import type { Playlist, Track, MusicUser } from '@/types';
 
 const room = useRoomStore();
@@ -14,6 +15,16 @@ type Tab = 'search' | 'playlist' | 'radio';
 const tab = ref<Tab>('search');
 
 /* ——— 搜索点歌 ——— */
+const availableSources = computed(() => rooms.config?.sources || []);
+const selectedSource = ref('');
+const activeSource = computed(() => {
+  if (selectedSource.value && availableSources.value.some((s) => s.id === selectedSource.value)) {
+    return selectedSource.value;
+  }
+  return availableSources.value[0]?.id || '';
+});
+const isBiliSource = computed(() => activeSource.value === 'bili');
+
 const keyword = ref('');
 const searching = ref(false);
 const results = ref<Track[]>([]);
@@ -23,14 +34,23 @@ const pageSize = 8;
 const searched = ref(false);
 const pending = ref(new Set<string>());
 
+function selectSource(id: string) {
+  if (activeSource.value === id) return;
+  selectedSource.value = id;
+  results.value = [];
+  total.value = 0;
+  page.value = 1;
+  searched.value = false;
+}
+
 async function doSearch(reset = true) {
   if (searching.value) return;
   const q = keyword.value.trim();
-  if (!q) return ui.warn('先输入歌名或歌手');
+  if (!q) return ui.warn(isBiliSource.value ? '先输入 B 站搜索词或 BV 号' : '先输入歌名或歌手');
   if (reset) page.value = 1;
   searching.value = true;
   try {
-    const res = await room.search(q, page.value, pageSize);
+    const res = await room.search(q, page.value, pageSize, selectedSource.value || undefined);
     results.value = res.tracks;
     total.value = res.total;
     searched.value = true;
@@ -272,11 +292,28 @@ function loadRadio(id: string) {
 
     <!-- 搜索点歌 -->
     <div v-show="tab === 'search'" class="pane">
+      <div v-if="availableSources.length > 1" class="mode-switch source-switch" aria-label="选择音乐源">
+        <button
+          v-for="s in availableSources"
+          :key="s.id"
+          type="button"
+          :class="{ on: activeSource === s.id }"
+          :aria-pressed="activeSource === s.id"
+          :disabled="searching"
+          @click="selectSource(s.id)"
+        >
+          {{ s.label }}
+        </button>
+      </div>
       <div class="row">
         <input
           v-model="keyword"
           class="input night"
-          placeholder="歌名 / 歌手 / 专辑"
+          :placeholder="
+            isBiliSource
+              ? '搜索 B站视频 / 歌曲，或直接粘贴 BV 号 / 链接'
+              : '歌名 / 歌手 / 专辑'
+          "
           @keydown.enter="doSearch()"
         />
         <button
@@ -289,18 +326,24 @@ function loadRadio(id: string) {
           <Icon name="search" :size="17" />
         </button>
       </div>
+      <p v-if="isBiliSource" class="source-note">
+        仅抽取 B 站纯音频流播放，支持关键词、BV 号或带分 P 的视频链接。
+      </p>
 
       <div v-if="searching" class="state">正在搜索…</div>
       <div v-else-if="searched && !results.length" class="state">没有找到，换个关键词试试。</div>
 
       <ul v-else-if="results.length" class="tracks">
-        <li v-for="t in results" :key="t.id" class="track">
+        <li v-for="t in results" :key="t.source + ':' + t.id" class="track">
           <div class="t-main">
             <span class="t-name">{{ t.name }}</span>
             <span class="t-sub"
-              >{{ t.artist }}<template v-if="t.album"> · 《{{ t.album }}》</template></span
+              >{{ t.artist
+              }}<template v-if="t.album && t.source !== 'bili'"> · 《{{ t.album }}》</template
+              ><template v-if="t.duration > 0"> · {{ formatTime(t.duration) }}</template></span
             >
           </div>
+          <span v-if="t.source === 'bili'" class="tag bili-tag tiny">B站音频</span>
           <span v-if="t.fee > 0" class="tag gold tiny">VIP</span>
           <button class="add" type="button" :disabled="pending.has(t.id)" @click="pick(t)">
             点歌
@@ -614,6 +657,15 @@ function loadRadio(id: string) {
   font-size: 9px;
   min-height: 18px;
   padding: 1px 5px;
+}
+.source-note {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.bili-tag {
+  background: #e9f2fb;
+  color: #2f6c9e;
 }
 .pager {
   display: flex;

@@ -11,11 +11,19 @@ export interface Toast {
 let seq = 0;
 
 type RoomDisplay = 'coverVisible' | 'queueVisible' | 'chatVisible';
+const DEFAULT_DISPLAY: Record<RoomDisplay, boolean> = {
+  coverVisible: false,
+  queueVisible: true,
+  chatVisible: true,
+};
+
 function savedDisplay(key: RoomDisplay): boolean {
   try {
-    return localStorage.getItem(`yue.${key}`) !== 'false';
+    const saved = localStorage.getItem(`yue.${key}`);
+    if (saved === null) return DEFAULT_DISPLAY[key];
+    return saved === 'true';
   } catch {
-    return true;
+    return DEFAULT_DISPLAY[key];
   }
 }
 

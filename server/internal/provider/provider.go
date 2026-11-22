@@ -1,18 +1,20 @@
 // Package provider 定义音乐源接口与注册表。
 //
-// v1 只有两个实现：netease（source 前缀 "wy"）与 demo（source 前缀 "demo"）。
+// 当前支持：netease（source = "wy"）、bilibili（source = "bili"）与 demo（source = "demo"）。
 package provider
 
 import (
 	"context"
+	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/hakrelin/music/server/internal/model"
 )
 
 // Provider 是一个音乐源。
 type Provider interface {
-	// Name 返回 provider 名称，如 "wy"、"demo"。
+	// Name 返回 provider 名称，如 "wy"、"bili"、"demo"。
 	Name() string
 	// Search 按关键词搜歌曲。返回曲目、总数。
 	Search(ctx context.Context, q string, page, size int) ([]model.Track, int, error)
@@ -44,14 +46,28 @@ type DetailProvider interface {
 	TrackDetail(ctx context.Context, id string) (model.Track, error)
 }
 
-// Registry 按 source 路由到 Provider。
+// Registry 按 source 路由到 Provider（并发安全，支持管理后台热更新）。
 type Registry struct {
+	mu     sync.RWMutex
 	byName map[string]Provider
 }
 
 func NewRegistry() *Registry { return &Registry{byName: map[string]Provider{}} }
 
-func (r *Registry) Register(p Provider) { r.byName[p.Name()] = p }
+func (r *Registry) Register(p Provider) {
+	if p == nil {
+		return
+	}
+	r.mu.Lock()
+	r.byName[p.Name()] = p
+	r.mu.Unlock()
+}
+
+func (r *Registry) Unregister(name string) {
+	r.mu.Lock()
+	delete(r.byName, strings.TrimSpace(name))
+	r.mu.Unlock()
+}
 
 // For 返回 source 对应的 provider；source 为空时返回默认 provider（demo）。
 func (r *Registry) For(source string) (Provider, bool) {
@@ -59,7 +75,9 @@ func (r *Registry) For(source string) (Provider, bool) {
 	if source == "" {
 		source = "demo"
 	}
+	r.mu.RLock()
 	p, ok := r.byName[source]
+	r.mu.RUnlock()
 	return p, ok
 }
 
@@ -68,6 +86,8 @@ func (r *Registry) ForTrack(t model.Track) (Provider, bool) { return r.For(t.Sou
 
 // Names 返回已注册的 source 列表（用于 /api/config）。
 func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]string, 0, len(r.byName))
 	for k := range r.byName {
 		out = append(out, k)
@@ -83,4 +103,15 @@ type UserSearcher interface {
 // RefreshProvider can lower quality when the client cannot play the original stream.
 type RefreshProvider interface {
 	ResolveFresh(context.Context, *model.Track, bool) error
+}
+
+// StreamProxyProvider 是可选能力：对于上游 CDN 强校验 Referer（如 B 站）的音源，
+// /api/stream/{id} 在对象存储未命中时会交由该接口带 Referer + Range 透传纯音频流。
+type StreamProxyProvider interface {
+	ServeAudio(w http.ResponseWriter, r *http.Request, id string, lower bool) bool
+}
+
+// UpstreamAudioResolver 是可选能力：解析真实上游音频地址（供对象存储缓存预热下载用）。
+type UpstreamAudioResolver interface {
+	ResolveUpstreamAudio(ctx context.Context, id string, lower bool) (string, error)
 }

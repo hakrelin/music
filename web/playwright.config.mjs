@@ -1,9 +1,25 @@
 import { defineConfig } from '@playwright/test';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 const edge = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+const linuxChromium = '/usr/bin/chromium';
 const executablePath =
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
-  (process.platform === 'win32' && existsSync(edge) ? edge : undefined);
+  (process.platform === 'win32' && existsSync(edge)
+    ? edge
+    : process.platform === 'linux' && existsSync(linuxChromium)
+      ? linuxChromium
+      : undefined);
+
+const e2eSecretsFile = path.join(os.tmpdir(), `music-e2e-secrets-${process.pid}.json`);
+try {
+  rmSync(e2eSecretsFile, { force: true });
+} catch {
+  // ignore
+}
+
 export default defineConfig({
   testDir: './tests',
   timeout: 30000,
@@ -26,6 +42,7 @@ export default defineConfig({
         MUSIC_PROVIDER: 'demo',
         MUSIC_ROOT_PASSWORD: 'test-room-owner',
         MUSIC_ADMIN_PASSWORD: 'test-room-admin',
+        MUSIC_SECRETS_FILE: e2eSecretsFile,
       },
     },
     {

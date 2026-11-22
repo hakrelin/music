@@ -144,7 +144,7 @@ test('手机切换面板时持续播放，320/390/768 像素下不横向溢出',
   }
 });
 
-test('收起封面与侧栏释放歌词空间，刷新后保留选择且不打断播放', async ({ page, request }) => {
+test('默认无大封面，切换封面与收起侧栏释放歌词空间，刷新后保留选择且不打断播放', async ({ page, request }) => {
   const id = await create(request, '布局偏好');
   await observeAudio(page);
   await joined(page, id);
@@ -152,19 +152,24 @@ test('收起封面与侧栏释放歌词空间，刷新后保留选择且不打�
   await page.locator('.track').first().getByRole('button', { name: '点歌', exact: true }).click();
   await page.keyboard.press('Escape');
   await ensurePlaying(page);
-  const before = await page.locator('.lyrics').boundingBox();
-  await page.evaluate(() => { window.__layoutAudio = window.__testAudio; });
-  await page.getByRole('button', { name: '隐藏封面', exact: true }).click();
+  // 默认无主播放区大封面，底栏和队列缩略图保持可见。
   await expect(page.locator('.album-stage')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '显示封面', exact: true })).toBeVisible();
   await expect(page.locator('.bar-cover')).toBeVisible();
   await expect(page.locator('.queue-cover img').first()).toBeVisible();
-  const after = await page.locator('.lyrics').boundingBox();
-  expect(after.height - before.height).toBeGreaterThan(100);
+  const withoutCover = await page.locator('.lyrics').boundingBox();
+  await page.evaluate(() => { window.__layoutAudio = window.__testAudio; });
+  await page.getByRole('button', { name: '显示封面', exact: true }).click();
+  await expect(page.locator('.album-stage')).toBeVisible();
+  const withCover = await page.locator('.lyrics').boundingBox();
+  expect(withoutCover.height - withCover.height).toBeGreaterThan(100);
+  await page.getByRole('button', { name: '隐藏封面', exact: true }).click();
+  await expect(page.locator('.album-stage')).toHaveCount(0);
   await page.getByRole('button', { name: '队列', exact: true }).click();
   await page.getByRole('button', { name: '聊天', exact: true }).click();
   await expect(page.locator('.queue-panel')).toBeHidden();
   await expect(page.locator('.chat-panel')).toBeHidden();
-  expect((await page.locator('.lyrics').boundingBox()).width - before.width).toBeGreaterThan(400);
+  expect((await page.locator('.lyrics').boundingBox()).width - withCover.width).toBeGreaterThan(400);
   expect(await page.evaluate(() => window.__layoutAudio === window.__testAudio && !window.__testAudio.paused)).toBe(true);
   // 点歌仍有独立入口；收起队列后也能打开。
   await page.getByRole('button', { name: '点歌', exact: true }).click();
@@ -189,6 +194,10 @@ test('收起封面与侧栏释放歌词空间，刷新后保留选择且不打�
   await expect(page.locator('.album-stage')).toHaveCount(0);
   await page.getByRole('button', { name: '显示封面', exact: true }).click();
   await expect(page.locator('.album-stage')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('.room-gate')).toHaveCount(0);
+  await expect(page.locator('.album-stage')).toBeVisible();
+  await page.getByRole('button', { name: '隐藏封面', exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: '队列', exact: true }).click();
   await page.getByRole('button', { name: '聊天', exact: true }).click();
@@ -205,7 +214,7 @@ test('播放页适应矮屏与手机，歌词和聊天输入不被播放条遮�
   for (const [width, height] of [[320, 568], [390, 844], [768, 1024], [1024, 768], [1440, 900], [844, 390]]) {
     await page.setViewportSize({ width, height });
     if (width <= 900) await page.getByRole('button', { name: '正在听', exact: true }).click();
-    for (const cover of [true, false]) {
+    for (const cover of [false, true]) {
       await expect(page.getByRole('button', { name: cover ? '隐藏封面' : '显示封面', exact: true })).toBeVisible();
       const lyrics = await page.locator('.lyrics').boundingBox();
       const bar = await page.locator('.player-bar').boundingBox();
@@ -754,4 +763,60 @@ test('前台恢复会重连假活连接，保持音频和房间时间轴', async
   await expect.poll(()=>page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('room').connected)).toBe(true);
   expect(await page.evaluate(()=>window.__testAudio===window.__originalMedia)).toBe(true);
   expect(await page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('room').startedAt)).toBe(started);
+});
+
+test('搜索面板支持切换哔哩哔哩音源，默认要求登录态提示清晰', async ({ page, request }) => {
+  const id = await create(request, 'B站音源测试');
+  await joined(page, id);
+  await page.getByRole('button', { name: '添加歌曲', exact: true }).click();
+  await expect(page.getByRole('button', { name: '哔哩哔哩', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '哔哩哔哩', exact: true }).click();
+  await expect(page.getByText('仅抽取 B 站纯音频流播放')).toBeVisible();
+  await page.getByPlaceholder('搜索 B站视频 / 歌曲，或直接粘贴 BV 号 / 链接').fill('Bad Apple');
+  await page.getByRole('button', { name: '搜索音乐', exact: true }).click();
+  await expect(page.locator('.toast.error').last()).toContainText('B站默认使用登录态');
+});
+
+test('管理员后台支持口令认证、B站/网易云配置与自定义 Key 持久化', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('link', { name: '管理后台', exact: true }).click();
+  await page.waitForURL('**/admin');
+  await expect(page.getByRole('heading', { name: '管理员后台', exact: true })).toBeVisible();
+
+  // 错误口令被拒
+  await page.getByLabel('管理员口令', { exact: true }).fill('wrong-password');
+  await page.getByRole('button', { name: '登录管理后台', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('口令不对');
+
+  // 使用 rootPassword 登录成功
+  await page.getByLabel('管理员口令', { exact: true }).fill('test-room-owner');
+  await page.getByRole('button', { name: '登录管理后台', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '运行状态与配置文件', exact: true })).toBeVisible();
+  await expect(page.getByLabel('启用 B 站搜歌与抽音')).toBeChecked();
+  await expect(page.getByLabel('默认使用登录态')).toBeChecked();
+
+  // 显式保存 B 站 Cookie，页面展示包含键且不回显明文
+  await page.getByLabel('显式配置 B 站 Cookie', { exact: true }).fill('SESSDATA=e2e-secret-sess; bili_jct=e2e-jct');
+  await page.getByRole('button', { name: '保存 B 站配置', exact: true }).click();
+  await expect(page.locator('.toast.ok').last()).toContainText('B 站配置已保存');
+  await expect(page.getByText('包含键：SESSDATA, bili_jct')).toBeVisible();
+  expect(await page.content()).not.toContain('e2e-secret-sess');
+
+  // 新增自定义 Key 并刷新确认持久化
+  await page.getByLabel('Key 名称', { exact: true }).fill('demoApiKey');
+  await page.getByLabel('Key 值', { exact: true }).fill('secret-key-999999');
+  await page.getByRole('button', { name: '新增 / 更新 Key', exact: true }).click();
+  await expect(page.locator('.toast.ok').last()).toContainText('demoApiKey');
+  await page.reload();
+  await expect(page.locator('.key-row code', { hasText: 'demoApiKey' })).toBeVisible();
+  expect(await page.content()).not.toContain('secret-key-999999');
+
+  // 清理测试状态并退出登录
+  await page.locator('.key-row', { hasText: 'demoApiKey' }).getByRole('button', { name: '删除', exact: true }).click();
+  await expect(page.locator('.key-row', { hasText: 'demoApiKey' })).toHaveCount(0);
+  await page.locator('section[aria-label="哔哩哔哩账号与配置"]').getByRole('button', { name: '清空 Cookie', exact: true }).click();
+  await expect(page.locator('.toast.ok').last()).toContainText('已清空 B 站 Cookie');
+
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '管理员后台', exact: true })).toBeVisible();
 });

@@ -11,16 +11,21 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      component: () => import('@/views/HomeView.vue')
+      component: () => import('@/views/HomeView.vue'),
     },
     {
       path: '/room/:id',
       name: 'room',
       component: () => import('@/views/RoomView.vue'),
-      props: true
+      props: true,
     },
-    { path: '/:pathMatch(.*)*', redirect: '/' }
-  ]
+    {
+      path: '/admin',
+      name: 'admin',
+      component: () => import('@/views/AdminView.vue'),
+    },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
+  ],
 });
 
 export default router;

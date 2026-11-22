@@ -1,10 +1,10 @@
 // musicd 是「茶与金平糖」的后端入口：单二进制，无外部依赖。
 //
 // 启动流程（docs/architecture.md §6/§9）：
-//  1. 加载配置（默认值 → config.example.json → config.local.json → env）
-//  2. 建 provider 注册表（demo 始终注册；有 cookie / 指定 wy 时注册 netease）
+//  1. 加载配置（默认值 → config.example.json → config.local.json → secrets.json → env）
+//  2. 建 provider 注册表（demo 始终注册；有 cookie / 指定 wy 时注册 netease；默认启用 bilibili）
 //  3. 启动 room hub（内置电台房保证存在）与 500ms 巡检循环
-//  4. 启动 HTTP 服务（API + WS + 静态资源），等 SIGINT/SIGTERM 优雅退出
+//  4. 启动 HTTP 服务（API + 管理后台 + WS + 静态资源），等 SIGINT/SIGTERM 优雅退出
 package main
 
 import (
@@ -25,6 +25,7 @@ import (
 	"github.com/hakrelin/music/server/internal/hub"
 	"github.com/hakrelin/music/server/internal/model"
 	"github.com/hakrelin/music/server/internal/provider"
+	"github.com/hakrelin/music/server/internal/provider/bilibili"
 	"github.com/hakrelin/music/server/internal/provider/demo"
 	"github.com/hakrelin/music/server/internal/provider/netease"
 	"github.com/hakrelin/music/server/internal/storage"
@@ -41,7 +42,7 @@ func main() {
 }
 
 func run() error {
-	cfg, err := config.Load()
+	cfg, meta, err := config.LoadWithMeta("")
 	if err != nil {
 		return err
 	}
@@ -49,7 +50,6 @@ func run() error {
 	slog.SetDefault(logger)
 	if cfg.DataDir != "" {
 		if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-			// 数据目录 v1 还没用上，创建失败只警告，不阻止启动。
 			logger.Warn("数据目录创建失败", "dir", cfg.DataDir, "err", err)
 		}
 	}
@@ -59,27 +59,52 @@ func run() error {
 	demoProvider := demo.New()
 	reg.Register(demoProvider)
 
+	wyProvider := netease.New(netease.Config{Cookie: cfg.NeteaseCookie})
 	primary := "demo"
 	useWY := strings.EqualFold(cfg.Provider, "wy") ||
 		(strings.EqualFold(cfg.Provider, "auto") && strings.TrimSpace(cfg.NeteaseCookie) != "")
 	if useWY {
-		wy := netease.New(netease.Config{Cookie: cfg.NeteaseCookie})
-		reg.Register(wy)
+		reg.Register(wyProvider)
 		primary = "wy"
 	}
-	logger.Info("provider 就绪", "primary", primary, "sources", reg.Names())
 
-	// 1.5) 音频缓存：多吉云对象存储。听过的歌落桶，下次播放 302 过去直连 COS。
-	cache, cacheResolve := buildCache(cfg, reg, logger)
+	biliProvider := bilibili.New(bilibili.Config{
+		Cookie:   cfg.Bilibili.Cookie,
+		UseLogin: cfg.Bilibili.UseLogin,
+	})
+	if cfg.Bilibili.Enabled {
+		reg.Register(biliProvider)
+	}
+	logger.Info("provider 就绪",
+		"primary", primary,
+		"sources", reg.Names(),
+		"biliEnabled", cfg.Bilibili.Enabled,
+		"biliUseLogin", cfg.Bilibili.UseLogin,
+		"secretsFile", meta.SecretsPath,
+	)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// 1.5) 音频缓存：多吉云对象存储（支持后台热更新）。
+	cacheResolve := buildCacheResolver(reg)
+	rebuildCache := func(c config.Config) *storage.Cache {
+		sc := buildStorageCache(c, logger)
+		if sc != nil && sc.Enabled() {
+			sc.Run(ctx)
+		}
+		return sc
+	}
+	cacheHolder := storage.NewHolder(rebuildCache(cfg))
+	defer cacheHolder.Close()
 
 	// 2) 房间 hub
 	idle := time.Duration(cfg.RoomIdleMinutes) * time.Minute
 	var onPlayed func(model.Track)
 	var fallbackURL func(source, id string) (string, bool)
-	if cache.Enabled() {
-		onPlayed = func(t model.Track) { cache.Ensure(t.Source, t.ID, cacheResolve) }
-		// 解析失败（VIP 掉线 / 403 / 接口抽风）时用已缓存的音频地址兜底
-		fallbackURL = cache.Lookup
+	if cacheHolder.Enabled() {
+		onPlayed = func(t model.Track) { cacheHolder.Ensure(t.Source, t.ID, cacheResolve) }
+		fallbackURL = cacheHolder.Lookup
 	}
 	h := hub.New(hub.Options{
 		Version:         version,
@@ -96,19 +121,20 @@ func run() error {
 	})
 	h.StartBuiltinRooms()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	go h.Run(ctx)
-	cache.Run(ctx)
 
 	// 3) HTTP
 	api := httpapi.New(httpapi.Options{
 		Config:       cfg,
+		Meta:         meta,
 		Hub:          h,
 		Registry:     reg,
 		Demo:         demoProvider,
-		Cache:        cache,
+		Netease:      wyProvider,
+		Bilibili:     biliProvider,
+		Cache:        cacheHolder,
 		CacheResolve: cacheResolve,
+		RebuildCache: rebuildCache,
 		Version:      version,
 		Logger:       logger,
 	})
@@ -147,15 +173,15 @@ func run() error {
 	return nil
 }
 
-// buildCache 构造音频缓存与「解析 128k 地址」回调。
-//
-// 为什么缓存用 128k：多吉云「简单上传」接口上限 10MB，320k 的 5 分钟歌就有
-// 18MB 压不进去；128k 一般 4~7MB，能稳定落桶。直连播放仍然是 320k。
-func buildCache(cfg config.Config, reg *provider.Registry, logger *slog.Logger) (*storage.Cache, storage.Resolver) {
-	resolve := func(ctx context.Context, source, id string) (string, error) {
+// buildCacheResolver 构造「解析低码率真实上游音频地址」回调，供对象存储预热下载使用。
+func buildCacheResolver(reg *provider.Registry) storage.Resolver {
+	return func(ctx context.Context, source, id string) (string, error) {
 		p, ok := reg.For(source)
 		if !ok {
 			return "", fmt.Errorf("未知音乐源 %q", source)
+		}
+		if ur, ok := p.(provider.UpstreamAudioResolver); ok {
+			return ur.ResolveUpstreamAudio(ctx, id, true)
 		}
 		t := model.Track{ID: id, Source: source}
 		if rp, ok := p.(provider.RefreshProvider); ok {
@@ -167,13 +193,28 @@ func buildCache(cfg config.Config, reg *provider.Registry, logger *slog.Logger) 
 		}
 		return t.URL, nil
 	}
+}
+
+// buildStorageCache 根据当前配置构造多吉云音频缓存实例（未启用或无有效账号时返回 nil）。
+func buildStorageCache(cfg config.Config, logger *slog.Logger) *storage.Cache {
 	if !cfg.Storage.Enabled {
-		return nil, resolve
+		return nil
 	}
 	accs := make([]storage.Account, 0, len(cfg.Storage.Accounts))
 	for _, a := range cfg.Storage.Accounts {
-		accs = append(accs, storage.Account{Label: a.Label, AK: a.AccessKey, SK: a.SecretKey,
-			Bucket: a.Bucket, Base: a.PublicBase})
+		accs = append(accs, storage.Account{
+			Label:  a.Label,
+			AK:     a.AccessKey,
+			SK:     a.SecretKey,
+			Bucket: a.Bucket,
+			Base:   a.PublicBase,
+		})
+	}
+	download := func(ctx context.Context, source, rawURL string, limit int64) ([]byte, bool, error) {
+		if source == "bili" {
+			return bilibili.DownloadAudio(ctx, rawURL, limit)
+		}
+		return netease.DownloadAudio(ctx, rawURL, limit)
 	}
 	cache := storage.New(storage.Options{
 		Accounts:           accs,
@@ -181,7 +222,7 @@ func buildCache(cfg config.Config, reg *provider.Registry, logger *slog.Logger) 
 		MaxBytesPerAccount: int64(cfg.Storage.MaxMBPerAccount) << 20,
 		EvictAfterDays:     cfg.Storage.EvictAfterDays,
 		MinHits:            cfg.Storage.MinHits,
-		Download:           netease.DownloadAudio,
+		Download:           download,
 		Logger:             logger,
 	})
 	if cache.Enabled() {
@@ -190,7 +231,7 @@ func buildCache(cfg config.Config, reg *provider.Registry, logger *slog.Logger) 
 	} else {
 		logger.Warn("音频缓存未启用（没有有效的存储账号）")
 	}
-	return cache, resolve
+	return cache
 }
 
 // newLogger 按配置的 logLevel 构造 slog logger。

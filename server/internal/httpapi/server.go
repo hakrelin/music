@@ -1,7 +1,7 @@
-// Package httpapi 提供 HTTP 路由、WS 升级入口与前端静态资源。
+// Package httpapi 提供 HTTP 路由、WS 升级入口、管理后台 API 与前端静态资源。
 //
 // 路由划分（docs §3）：
-//   - /api/** 全是 JSON（WS 除外），错误统一 {"error":{"code","message"}}；
+//   - /api/** 全是 JSON（WS 与音频流除外），错误统一 {"error":{"code","message"}}；
 //   - 其余路径是 SPA：命中真实文件就发文件，否则 fallback 到 index.html。
 package httpapi
 
@@ -17,38 +17,54 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hakrelin/music/server/internal/config"
 	"github.com/hakrelin/music/server/internal/hub"
 	"github.com/hakrelin/music/server/internal/model"
 	"github.com/hakrelin/music/server/internal/provider"
+	"github.com/hakrelin/music/server/internal/provider/bilibili"
 	"github.com/hakrelin/music/server/internal/provider/demo"
+	"github.com/hakrelin/music/server/internal/provider/netease"
 	"github.com/hakrelin/music/server/internal/storage"
 	"github.com/hakrelin/music/server/internal/webui"
 )
 
 // Server 聚合 HTTP 层所需的依赖。
 type Server struct {
+	cfgMu        sync.RWMutex
 	cfg          config.Config
+	meta         config.Meta
 	hub          *hub.Hub
 	reg          *provider.Registry
 	demo         *demo.Provider // 仅 demo provider 启用时非 nil
-	cache        *storage.Cache
+	netease      *netease.Provider
+	bilibili     *bilibili.Provider
+	cache        *storage.Holder
 	cacheResolve storage.Resolver
+	rebuildCache func(config.Config) *storage.Cache
 	version      string
 	log          *slog.Logger
 	static       fs.FS
+
+	adminMu       sync.Mutex
+	adminSessions map[string]time.Time
+	loginFails    map[string][]time.Time
 }
 
 // Options 构造 Server。
 type Options struct {
 	Config       config.Config
+	Meta         config.Meta
 	Hub          *hub.Hub
 	Registry     *provider.Registry
 	Demo         *demo.Provider
-	Cache        *storage.Cache
+	Netease      *netease.Provider
+	Bilibili     *bilibili.Provider
+	Cache        *storage.Holder
 	CacheResolve storage.Resolver
+	RebuildCache func(config.Config) *storage.Cache
 	Version      string
 	Logger       *slog.Logger
 }
@@ -59,16 +75,40 @@ func New(opts Options) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	meta := opts.Meta
+	if meta.SecretsPath == "" {
+		meta.SecretsPath = config.ResolveSecretsPath(opts.Config)
+	}
+	if meta.Secrets.Version <= 0 {
+		meta.Secrets.Version = 1
+	}
+	wy := opts.Netease
+	if wy == nil {
+		wy = netease.New(netease.Config{Cookie: opts.Config.NeteaseCookie})
+	}
+	bili := opts.Bilibili
+	if bili == nil {
+		bili = bilibili.New(bilibili.Config{
+			Cookie:   opts.Config.Bilibili.Cookie,
+			UseLogin: opts.Config.Bilibili.UseLogin,
+		})
+	}
 	return &Server{
-		cfg:          opts.Config,
-		hub:          opts.Hub,
-		reg:          opts.Registry,
-		demo:         opts.Demo,
-		cache:        opts.Cache,
-		cacheResolve: opts.CacheResolve,
-		version:      opts.Version,
-		log:          logger,
-		static:       webui.FS(),
+		cfg:           opts.Config.Clone(),
+		meta:          meta,
+		hub:           opts.Hub,
+		reg:           opts.Registry,
+		demo:          opts.Demo,
+		netease:       wy,
+		bilibili:      bili,
+		cache:         opts.Cache,
+		cacheResolve:  opts.CacheResolve,
+		rebuildCache:  opts.RebuildCache,
+		version:       opts.Version,
+		log:           logger,
+		static:        webui.FS(),
+		adminSessions: make(map[string]time.Time),
+		loginFails:    make(map[string][]time.Time),
 	}
 }
 
@@ -83,10 +123,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/rooms/{id}/auth", s.handleRoomAuth)
 	mux.HandleFunc("GET /api/ws", s.hub.ServeWS)
 
-	// 音频回退/缓存：命中对象存储就 302 过去，未命中先 302 到网易云并顺手预热。
+	// 音频回退 / 对象存储缓存 / B 站纯音频透传代理。
 	mux.HandleFunc("GET /api/stream/{id}", s.handleStream)
 	mux.HandleFunc("HEAD /api/stream/{id}", s.handleStream)
 	mux.HandleFunc("GET /api/cache/stats", s.handleCacheStats)
+
+	// 管理后台接口（root 口令登录 + Cookie 认证）。
+	s.registerAdminRoutes(mux)
 
 	// demo provider 的音频/封面：即使没注册 demo 也挂上路由，内部返回 404，
 	// 这样部署切到 wy 后旧的 demo 封面 URL 不会变成 HTML fallback。
@@ -153,30 +196,48 @@ type configOut struct {
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
+	s.cfgMu.RLock()
+	site := siteOut{Name: s.cfg.Site.Name, Tagline: s.cfg.Site.Tagline}
+	s.cfgMu.RUnlock()
 	writeJSON(w, http.StatusOK, configOut{
-		Site:         siteOut{Name: s.cfg.Site.Name, Tagline: s.cfg.Site.Tagline},
+		Site:         site,
 		Sources:      s.sources(),
 		RadioPresets: s.hub.Presets(),
 	})
 }
 
-// sources 列出可用音乐源。wy 排前面（真实源优先），demo 始终兜底。
+// sources 列出前端点歌面板可选的音乐源。
+// 主音源排第一位（wy 生效时隐藏 demo，保持界面简洁；demo 模式下 demo 排第一、bili 排第二）。
 func (s *Server) sources() []sourceOut {
 	labels := map[string]string{
 		"wy":   "网易云音乐",
+		"bili": "哔哩哔哩",
 		"demo": "演示电台",
 	}
+	primary := s.hub.PrimaryProvider()
 	rank := func(id string) int {
+		if id == primary {
+			return 0
+		}
 		switch id {
 		case "wy":
-			return 0
-		case "demo":
 			return 1
-		default:
+		case "bili":
 			return 2
+		case "demo":
+			return 3
+		default:
+			return 4
 		}
 	}
-	names := s.reg.Names()
+	raw := s.reg.Names()
+	names := make([]string, 0, len(raw))
+	for _, n := range raw {
+		if n == "demo" && primary != "demo" {
+			continue
+		}
+		names = append(names, n)
+	}
 	sort.Slice(names, func(i, j int) bool {
 		if rank(names[i]) != rank(names[j]) {
 			return rank(names[i]) < rank(names[j])
@@ -255,24 +316,21 @@ func (s *Server) handleAPINotFound(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "not_found", "接口不存在："+r.URL.Path)
 }
 
-// ---------- 音频回退 / 对象存储缓存 ----------
+// ---------- 音频回退 / 对象存储缓存 / B站纯音频代理 ----------
 
-// handleStream 是播放器的最后一道保险，也是缓存入口。
-//
-//   - 命中缓存：302 到对象存储的预签名地址（浏览器直连 COS，不吃服务器带宽）；
-//   - 未命中：现场解析地址，302 到网易云的健康节点，同时后台把这歌补进缓存，
-//     下次再放就直接走对象存储。
-//
-// 之所以用重定向而不是自己转发音频：3Mbps 出网带宽只够一两个人听，
-// 转发会立刻打满；重定向让流量完全落在网易云/COS 那边。
+// handleStream 是播放器的缓存与代理入口：
+//   - 命中对象存储：302 到 COS/CDN 地址（浏览器直连，不吃服务器带宽）；
+//   - B 站等强校验 Referer 的音源：未命中时代理透传纯音频流（带 Referer + Range），并后台预热对象存储；
+//   - 网易云未命中：现场解析并 302 到健康 CDN 节点，同时后台预热缓存。
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	id = strings.TrimSuffix(id, ".mp3")
+	id = strings.TrimSuffix(id, ".m4a")
 	source := strings.TrimSpace(r.URL.Query().Get("source"))
 	if source == "" {
 		source = s.hub.PrimaryProvider()
 	}
-	if id == "" || len(id) > 64 || strings.ContainsAny(id, "/\\?#") {
+	if id == "" || len(id) > 64 || strings.ContainsAny(id, "/\\?#") || strings.Contains(id, "..") {
 		writeError(w, http.StatusBadRequest, "bad_request", "曲目 ID 不合法")
 		return
 	}
@@ -292,6 +350,20 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown_source", "未知音乐源："+source)
 		return
 	}
+	if sp, ok := p.(provider.StreamProxyProvider); ok {
+		lower := r.URL.Query().Get("lower") == "1" || strings.EqualFold(r.URL.Query().Get("lower"), "true")
+		if r.Method == http.MethodGet && s.cache != nil && s.cacheResolve != nil && s.cache.Enabled() {
+			s.cache.Ensure(source, id, s.cacheResolve)
+		}
+		w.Header().Set("X-Cache", "proxy")
+		if sp.ServeAudio(w, r, id, lower) {
+			return
+		}
+		s.log.Warn("stream 代理拉取音频失败", "source", source, "track", id)
+		writeError(w, http.StatusBadGateway, "upstream", "这首曲目暂时取不到音频")
+		return
+	}
+
 	t := model.Track{ID: id, Source: source}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -307,7 +379,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, t.URL, http.StatusFound)
 }
 
-// handleCacheStats 给排查/巡检用：缓存了多少首、两个账号各占多少。
+// handleCacheStats 给排查/巡检用：缓存了多少首、各账号各占多少。
 func (s *Server) handleCacheStats(w http.ResponseWriter, _ *http.Request) {
 	if s.cache == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
@@ -317,8 +389,6 @@ func (s *Server) handleCacheStats(w http.ResponseWriter, _ *http.Request) {
 }
 
 // decodeJSON 读取并解码 JSON body，限制 64KB 防止恶意大包。
-// 不启用 DisallowUnknownFields：契约之外的附加字段应当被忽略，
-// 这样前端/调用方加字段不会把老服务端打挂。
 func decodeJSON(r *http.Request, dst any) error {
 	defer r.Body.Close()
 	dec := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
@@ -402,10 +472,6 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	s.serveIndex(w, r)
 }
 
-// serveFile 按路径决定缓存策略：
-//   - /assets/ 下是 Vite 带 hash 的产物，长缓存即可；
-//   - index.html 必须 no-cache，否则发版后用户拿到旧壳；
-//   - 其余短缓存。
 func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, name string, data []byte) {
 	ctype := mime.TypeByExtension(path.Ext(name))
 	if ctype == "" {
@@ -432,7 +498,6 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, name string, 
 	}
 }
 
-// serveIndex 返回 SPA 外壳；前端还没构建时给一条可读的提示。
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
 	data, err := fs.ReadFile(s.static, "index.html")
 	if err != nil {

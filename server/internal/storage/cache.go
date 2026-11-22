@@ -27,7 +27,7 @@ const (
 )
 
 // DownloadFunc 把播放地址整段拉下来；truncated 表示超过 limit。
-type DownloadFunc func(ctx context.Context, rawURL string, limit int64) (data []byte, truncated bool, err error)
+type DownloadFunc func(ctx context.Context, source, rawURL string, limit int64) (data []byte, truncated bool, err error)
 
 // Resolver 解析一首歌的播放地址（缓存预热用 128k 版本，体积才压得进 10MB）。
 type Resolver func(ctx context.Context, source, id string) (string, error)
@@ -70,8 +70,10 @@ type Cache struct {
 	items    map[string]*Item
 	inflight map[string]bool
 
-	dirty   bool
-	saveSig chan struct{}
+	dirty     bool
+	saveSig   chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 type account struct {
@@ -90,7 +92,7 @@ func New(opts Options) *Cache {
 		opts.Logger = slog.Default()
 	}
 	if opts.Download == nil {
-		opts.Download = func(context.Context, string, int64) ([]byte, bool, error) {
+		opts.Download = func(context.Context, string, string, int64) ([]byte, bool, error) {
 			return nil, false, fmt.Errorf("未配置下载实现")
 		}
 	}
@@ -105,6 +107,7 @@ func New(opts Options) *Cache {
 		items:    make(map[string]*Item),
 		inflight: make(map[string]bool),
 		saveSig:  make(chan struct{}, 1),
+		done:     make(chan struct{}),
 	}
 	for _, acc := range opts.Accounts {
 		if acc.AK == "" || acc.SK == "" || acc.Bucket == "" {
@@ -131,11 +134,16 @@ func New(opts Options) *Cache {
 func (c *Cache) Enabled() bool { return c != nil && len(c.accounts) > 0 }
 
 // keyFor 生成对象 key。用「源/曲目 ID」而不是曲名，避免中文与特殊字符问题。
+// 网易云保持 .mp3（与既有正式/测试索引完全兼容）；B 站 DASH 纯音频使用 .m4a（audio/mp4）。
 func keyFor(source, id string) string {
 	if source == "" {
 		source = "wy"
 	}
-	return "audio/" + source + "/" + id + ".mp3"
+	ext := ".mp3"
+	if source == "bili" {
+		ext = ".m4a"
+	}
+	return "audio/" + source + "/" + id + ext
 }
 
 func itemKey(source, id string) string { return source + ":" + id }
@@ -244,7 +252,7 @@ func (c *Cache) fill(source, id string, resolve Resolver) {
 		c.log.Warn("缓存预热：解析播放地址失败", "track", id, "err", err)
 		return
 	}
-	data, truncated, err := c.opts.Download(ctx, url, maxUploadBytes)
+	data, truncated, err := c.opts.Download(ctx, source, url, maxUploadBytes)
 	if err != nil {
 		c.log.Warn("缓存预热：下载失败", "track", id, "err", err)
 		return
@@ -383,24 +391,50 @@ func (c *Cache) markDirtyLocked() {
 	}
 }
 
-// saver 把索引防抖落盘：3 秒内多次变更只写一次。
+// saver 把索引防抖落盘：3 秒内多次变更只写一次；关闭前刷盘退出。
 func (c *Cache) saver() {
-	for range c.saveSig {
-		time.Sleep(saveDebounce)
-		c.mu.Lock()
-		if !c.dirty {
-			c.mu.Unlock()
-			continue
+	for {
+		select {
+		case <-c.done:
+			c.flush()
+			return
+		case <-c.saveSig:
 		}
-		snapshot := make(map[string]*Item, len(c.items))
-		for k, v := range c.items {
-			cp := *v
-			snapshot[k] = &cp
+		select {
+		case <-c.done:
+			c.flush()
+			return
+		case <-time.After(saveDebounce):
 		}
-		c.dirty = false
-		c.mu.Unlock()
-		c.writeIndex(snapshot)
+		c.flush()
 	}
+}
+
+func (c *Cache) flush() {
+	c.mu.Lock()
+	if !c.dirty {
+		c.mu.Unlock()
+		return
+	}
+	snapshot := make(map[string]*Item, len(c.items))
+	for k, v := range c.items {
+		cp := *v
+		snapshot[k] = &cp
+	}
+	c.dirty = false
+	c.mu.Unlock()
+	c.writeIndex(snapshot)
+}
+
+// Close 停止后台落盘与淘汰循环，并刷盘挂起索引。
+func (c *Cache) Close() {
+	if c == nil {
+		return
+	}
+	c.closeOnce.Do(func() {
+		close(c.done)
+		c.flush()
+	})
 }
 
 func (c *Cache) writeIndex(items map[string]*Item) {
@@ -441,6 +475,8 @@ func (c *Cache) Run(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-c.done:
 				return
 			case <-t.C:
 				c.Evict(ctx)
@@ -575,4 +611,69 @@ func (c *Cache) Stats() map[string]any {
 	out["inflight"] = len(c.inflight)
 	c.mu.Unlock()
 	return out
+}
+
+// Holder 是支持热替换的线程安全 Cache 容器（管理后台修改存储配置后即时生效）。
+type Holder struct {
+	mu    sync.RWMutex
+	cache *Cache
+}
+
+// NewHolder 构造 Holder。
+func NewHolder(c *Cache) *Holder { return &Holder{cache: c} }
+
+// Get 返回当前生效的 Cache（可能为 nil）。
+func (h *Holder) Get() *Cache {
+	if h == nil {
+		return nil
+	}
+	h.mu.RLock()
+	c := h.cache
+	h.mu.RUnlock()
+	return c
+}
+
+// Swap 替换当前 Cache，并优雅关闭旧实例。
+func (h *Holder) Swap(next *Cache) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	old := h.cache
+	h.cache = next
+	h.mu.Unlock()
+	if old != nil && old != next {
+		old.Close()
+	}
+}
+
+func (h *Holder) Enabled() bool {
+	if c := h.Get(); c != nil {
+		return c.Enabled()
+	}
+	return false
+}
+
+func (h *Holder) Lookup(source, id string) (string, bool) {
+	if c := h.Get(); c != nil {
+		return c.Lookup(source, id)
+	}
+	return "", false
+}
+
+func (h *Holder) Ensure(source, id string, resolve Resolver) {
+	if c := h.Get(); c != nil {
+		c.Ensure(source, id, resolve)
+	}
+}
+
+func (h *Holder) Stats() map[string]any {
+	if c := h.Get(); c != nil {
+		return c.Stats()
+	}
+	return map[string]any{"enabled": false}
+}
+
+func (h *Holder) Close() {
+	h.Swap(nil)
 }

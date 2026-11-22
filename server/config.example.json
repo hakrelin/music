@@ -1,7 +1,13 @@
 {
   "httpAddr": ":8080",
   "provider": "auto",
+  "secretsFile": "",
   "neteaseCookie": "",
+  "bilibili": {
+    "enabled": true,
+    "useLogin": true,
+    "cookie": ""
+  },
   "site": {
     "name": "茶与金平糖",
     "tagline": "和大家一起听歌"

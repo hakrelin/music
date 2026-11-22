@@ -79,12 +79,31 @@ func (h *Hub) resolveTrack(ctx context.Context, t *model.Track) error {
 	return h.resolveMedia(ctx, t, "", false)
 }
 
+// ClearURLCache 清理进程内解析缓存（source 为空时清空全部，否则只清该音乐源）。
+func (h *Hub) ClearURLCache(source string) {
+	prefix := strings.TrimSpace(source)
+	if prefix != "" {
+		prefix += ":"
+	}
+	h.urls.mu.Lock()
+	if prefix == "" {
+		h.urls.m = make(map[string]urlEntry)
+	} else {
+		for k := range h.urls.m {
+			if strings.HasPrefix(k, prefix) {
+				delete(h.urls.m, k)
+			}
+		}
+	}
+	h.urls.mu.Unlock()
+}
+
 func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string, lower bool) error {
 	if t == nil || strings.TrimSpace(t.ID) == "" {
 		return errors.New("曲目缺少 ID")
 	}
 	if t.Source == "" {
-		t.Source = h.primary
+		t.Source = h.PrimaryProvider()
 	}
 	key := trackKey(*t)
 	if lower {
@@ -138,12 +157,14 @@ func (h *Hub) resolveMedia(ctx context.Context, t *model.Track, failedURL string
 			}
 			// 兜底：解析失败（VIP 掉线、曲目 403、接口抽风）时，如果这首已经在
 			// 对象存储缓存里，就直接用缓存地址播——不让「已有本地副本」的歌被跳过。
-			if err != nil && h.fallbackURL != nil {
-				if cached, ok := h.fallbackURL(cp.Source, cp.ID); ok && strings.TrimSpace(cached) != "" {
-					h.log.Warn("播放地址解析失败，改用缓存地址兜底",
-						"source", cp.Source, "track", cp.ID, "err", err.Error(), "url", cached)
-					cp.URL = cached
-					err = nil
+			if err != nil {
+				if fallback := h.fallbackURLFn(); fallback != nil {
+					if cached, ok := fallback(cp.Source, cp.ID); ok && strings.TrimSpace(cached) != "" {
+						h.log.Warn("播放地址解析失败，改用缓存地址兜底",
+							"source", cp.Source, "track", cp.ID, "err", err.Error(), "url", cached)
+						cp.URL = cached
+						err = nil
+					}
 				}
 			}
 			h.log.Info("播放地址解析完成", "source", cp.Source, "track", cp.ID, "lower", lower, "elapsedMs", time.Since(resolveStarted).Milliseconds(), "ok", err == nil)

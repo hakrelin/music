@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hakrelin/music/server/internal/model"
@@ -55,10 +56,38 @@ type Config struct {
 
 // Provider 实现 provider.Provider。
 type Provider struct {
+	mu      sync.RWMutex
 	cfg     Config
 	client  *http.Client
 	csrf    string // 从 cookie 里提取的 __csrf，部分 weapi 接口要求与 cookie 一致
 	baseURL string // weapi 入口，默认 weapiBaseURL；单测可替换成 httptest 地址
+}
+
+// SetCookie 热更新网易云登录 Cookie（并发安全）。
+func (p *Provider) SetCookie(cookie string) {
+	clean := sanitizeCookie(cookie)
+	p.mu.Lock()
+	p.cfg.Cookie = clean
+	p.csrf = csrfFromCookie(clean)
+	p.mu.Unlock()
+}
+
+// Cookie 返回当前配置的网易云 Cookie。
+func (p *Provider) Cookie() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return sanitizeCookie(p.cfg.Cookie)
+}
+
+func (p *Provider) cookieSnapshot() (cookie, csrf string) {
+	p.mu.RLock()
+	cookie = sanitizeCookie(p.cfg.Cookie)
+	csrf = p.csrf
+	p.mu.RUnlock()
+	if csrf == "" && cookie != "" {
+		csrf = csrfFromCookie(cookie)
+	}
+	return cookie, csrf
 }
 
 // New 构造 provider；没有 cookie 时仍可搜索，但播放地址可能受限。
@@ -102,7 +131,7 @@ func (p *Provider) Search(ctx context.Context, q string, page, size int) ([]mode
 		size = maxSearchPageSize
 	}
 
-	if p.cfg.Cookie != "" {
+	if p.Cookie() != "" {
 		tracks, total, err := p.searchCloud(ctx, q, page, size)
 		if err == nil {
 			return tracks, total, nil
@@ -217,7 +246,7 @@ func (p *Provider) SearchPlaylists(ctx context.Context, q string, page, size int
 		size = maxSearchPageSize
 	}
 
-	if p.cfg.Cookie != "" {
+	if p.Cookie() != "" {
 		playlists, total, err := p.searchPlaylistsCloud(ctx, q, page, size)
 		if err == nil {
 			return playlists, total, nil

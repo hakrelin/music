@@ -149,12 +149,13 @@ func (c *Client) handleChat(m *inMsg) {
 
 func (c *Client) handleAuth(m *inMsg) {
 	role := strings.ToLower(strings.TrimSpace(m.Role))
+	rootPwd, adminPwd := c.hub.passwords()
 	var want string
 	switch role {
 	case "root":
-		want = c.hub.rootPassword
+		want = rootPwd
 	case "admin":
-		want = c.hub.adminPassword
+		want = adminPwd
 	default:
 		c.sendErrorCode("bad_request", "未知角色", m.Req)
 		return
@@ -201,7 +202,7 @@ func (c *Client) handleBlacklist(m *inMsg, black bool) {
 func (c *Client) sourceOf(src string) (string, bool) {
 	src = strings.TrimSpace(src)
 	if src == "" {
-		return c.hub.primary, true
+		return c.hub.PrimaryProvider(), true
 	}
 	if _, ok := c.hub.reg.For(src); ok {
 		return src, true

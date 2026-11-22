@@ -229,102 +229,17 @@ func (p *Provider) endpointURL(endpoint string) string {
 // 重试：只有网络错误、5xx/429、响应不是 JSON/空响应才重试（最多 2 次，400ms/800ms 退避）；
 // 业务错误（code != 200）不重试，直接返回 *weapiError。
 func (p *Provider) weapi(ctx context.Context, endpoint string, payload map[string]any, out any) error {
-	// 每次都带 csrf_token：登录态下部分接口要求它与 cookie 里的 __csrf 一致。
-	body := make(map[string]any, len(payload)+1)
-	for k, v := range payload {
-		body[k] = v
-	}
-	if _, ok := body["csrf_token"]; !ok {
-		body["csrf_token"] = p.csrf
-	}
-
-	var lastErr error
-	for attempt := 0; attempt <= weapiMaxRetries; attempt++ {
-		if attempt > 0 {
-			delay := weapiRetryBase
-			for i := 1; i < attempt; i++ {
-				delay *= 2
-			}
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("weapi %s 等待重试时被取消: %w", endpoint, ctx.Err())
-			case <-time.After(delay):
-			}
-		}
-		err := p.weapiOnce(ctx, endpoint, body, out)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		var retryable *retryableError
-		if !errors.As(err, &retryable) {
-			return err
-		}
-	}
-	return fmt.Errorf("weapi %s 重试 %d 次后仍失败: %w", endpoint, weapiMaxRetries, lastErr)
-}
-
-// weapiOnce 是单次请求（不含重试逻辑）。
-func (p *Provider) weapiOnce(ctx context.Context, endpoint string, payload map[string]any, out any) error {
-	params, encSecKey, _, err := weapiEncrypt(payload)
+	raw, _, err := p.weapiRaw(ctx, endpoint, payload, true)
 	if err != nil {
-		return fmt.Errorf("weapi %s 加密失败: %w", endpoint, err)
-	}
-
-	form := url.Values{}
-	form.Set("params", params)
-	form.Set("encSecKey", encSecKey)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpointURL(endpoint), strings.NewReader(form.Encode()))
-	if err != nil {
-		return fmt.Errorf("weapi %s 构造请求失败: %w", endpoint, err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Referer", "https://music.163.com/")
-	req.Header.Set("Origin", "https://music.163.com")
-	req.Header.Set("User-Agent", weapiUserAgent)
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
-	if cookie := p.cfg.Cookie; cookie != "" {
-		req.Header.Set("Cookie", cookie)
-	}
-
-	client := p.client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("weapi %s 请求被取消: %w", endpoint, ctx.Err())
-		}
-		return &retryableError{err: fmt.Errorf("weapi %s 请求失败: %w", endpoint, err)}
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxWeapiBodyBytes))
-	if err != nil {
-		return &retryableError{err: fmt.Errorf("weapi %s 读取响应失败: %w", endpoint, err)}
-	}
-	if resp.StatusCode != http.StatusOK {
-		err := fmt.Errorf("weapi %s HTTP %d: %s", endpoint, resp.StatusCode, snippet(raw))
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			return &retryableError{err: err}
-		}
 		return err
 	}
-	if len(bytes.TrimSpace(raw)) == 0 {
-		// 网易云对「参数/加密不对」的请求会回 200 + 空 body，这属于可重试的坏响应。
-		return &retryableError{err: fmt.Errorf("weapi %s 返回空响应（加密参数可能被拒或触发风控）", endpoint)}
-	}
-
 	var head struct {
 		Code    int    `json:"code"`
 		Msg     string `json:"msg"`
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(raw, &head); err != nil {
-		return &retryableError{err: fmt.Errorf("weapi %s 响应不是 JSON（可能触发风控）: %s", endpoint, snippet(raw))}
+		return fmt.Errorf("weapi %s 响应不是 JSON: %s", endpoint, snippet(raw))
 	}
 	if head.Code != 200 {
 		msg := head.Msg
@@ -340,6 +255,106 @@ func (p *Provider) weapiOnce(ctx context.Context, endpoint string, payload map[s
 		return fmt.Errorf("weapi %s 响应解析失败: %w", endpoint, err)
 	}
 	return nil
+}
+
+// weapiRaw 发送 weapi 请求并返回原始 JSON 字节与响应 Set-Cookie，
+// 不要求 code == 200（用于扫码登录轮询 800/801/802/803 等接口）。
+func (p *Provider) weapiRaw(ctx context.Context, endpoint string, payload map[string]any, useCookie bool) ([]byte, []*http.Cookie, error) {
+	cookie, csrf := "", ""
+	if useCookie {
+		cookie, csrf = p.cookieSnapshot()
+	}
+	body := make(map[string]any, len(payload)+1)
+	for k, v := range payload {
+		body[k] = v
+	}
+	if _, ok := body["csrf_token"]; !ok {
+		body["csrf_token"] = csrf
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= weapiMaxRetries; attempt++ {
+		if attempt > 0 {
+			delay := weapiRetryBase
+			for i := 1; i < attempt; i++ {
+				delay *= 2
+			}
+			select {
+			case <-ctx.Done():
+				return nil, nil, fmt.Errorf("weapi %s 等待重试时被取消: %w", endpoint, ctx.Err())
+			case <-time.After(delay):
+			}
+		}
+		raw, cookies, err := p.weapiRawOnce(ctx, endpoint, body, cookie)
+		if err == nil {
+			return raw, cookies, nil
+		}
+		lastErr = err
+		var retryable *retryableError
+		if !errors.As(err, &retryable) {
+			return nil, nil, err
+		}
+	}
+	return nil, nil, fmt.Errorf("weapi %s 重试 %d 次后仍失败: %w", endpoint, weapiMaxRetries, lastErr)
+}
+
+// weapiRawOnce 是单次请求（不含重试逻辑），返回已验证合法 JSON 的原始响应和 cookies。
+func (p *Provider) weapiRawOnce(ctx context.Context, endpoint string, payload map[string]any, cookie string) ([]byte, []*http.Cookie, error) {
+	params, encSecKey, _, err := weapiEncrypt(payload)
+	if err != nil {
+		return nil, nil, fmt.Errorf("weapi %s 加密失败: %w", endpoint, err)
+	}
+
+	form := url.Values{}
+	form.Set("params", params)
+	form.Set("encSecKey", encSecKey)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpointURL(endpoint), strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, nil, fmt.Errorf("weapi %s 构造请求失败: %w", endpoint, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Referer", "https://music.163.com/")
+	req.Header.Set("Origin", "https://music.163.com")
+	req.Header.Set("User-Agent", weapiUserAgent)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+
+	client := p.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, fmt.Errorf("weapi %s 请求被取消: %w", endpoint, ctx.Err())
+		}
+		return nil, nil, &retryableError{err: fmt.Errorf("weapi %s 请求失败: %w", endpoint, err)}
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxWeapiBodyBytes))
+	if err != nil {
+		return nil, nil, &retryableError{err: fmt.Errorf("weapi %s 读取响应失败: %w", endpoint, err)}
+	}
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("weapi %s HTTP %d: %s", endpoint, resp.StatusCode, snippet(raw))
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			return nil, nil, &retryableError{err: err}
+		}
+		return nil, nil, err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		// 网易云对「参数/加密不对」的请求会回 200 + 空 body，这属于可重试的坏响应。
+		return nil, nil, &retryableError{err: fmt.Errorf("weapi %s 返回空响应（加密参数可能被拒或触发风控）", endpoint)}
+	}
+	if !json.Valid(raw) {
+		return nil, nil, &retryableError{err: fmt.Errorf("weapi %s 响应不是 JSON（可能触发风控）: %s", endpoint, snippet(raw))}
+	}
+	return raw, resp.Cookies(), nil
 }
 
 // snippet 截断响应体用于错误信息，避免把整页 HTML 塞进错误。

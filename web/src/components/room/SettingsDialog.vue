@@ -209,9 +209,14 @@ function toggle(key: 'loop' | 'random' | 'radio') {
           <span class="tag night" v-if="room.room?.builtin">常驻</span>
           <span class="tag night" v-if="room.room?.radio">电台</span>
         </p>
-        <button class="op" type="button" @click="copyLink">
-          <Icon name="link" :size="15" />复制邀请链接
-        </button>
+        <div class="ops">
+          <button class="op" type="button" @click="copyLink">
+            <Icon name="link" :size="15" />复制邀请链接
+          </button>
+          <RouterLink class="op" to="/admin" @click="emit('close')">
+            <Icon name="settings" :size="15" />服务器管理后台
+          </RouterLink>
+        </div>
       </section>
     </div></AppDialog
   >

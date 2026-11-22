@@ -324,11 +324,13 @@ export const useRoomStore = defineStore('room', {
       if (this.mock) return;
       this.socket?.send({ t: 'skip.vote' });
     },
-    async search(q: string, page = 1, size = 10): Promise<SearchResult> {
+    async search(q: string, page = 1, size = 10, source?: string): Promise<SearchResult> {
       if (this.mock) {
         return { tracks: mockTracks.slice(0, 6), total: 6 };
       }
-      const r = await this.socket!.request({ t: 'search', q, page, size });
+      const payload: Record<string, unknown> = { t: 'search', q, page, size };
+      if (source) payload.source = source;
+      const r = await this.socket!.request(payload);
       return {
         tracks: (r.tracks as Track[]) || [],
         total: Number(r.total || 0),

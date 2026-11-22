@@ -53,7 +53,7 @@ async function like(id: string, entry?: string) {
           </div>
           <div class="track-info">
             <b :title="t.name">{{ t.name }}</b
-            ><span>{{ t.artist }}</span
+            ><span><em v-if="t.source === 'bili'" class="source-pill">B站</em>{{ t.artist }}</span
             ><small v-if="t.nick">{{ t.nick }} 点的歌</small>
           </div>
           <div class="track-end">
@@ -232,6 +232,17 @@ header {
 .track-info small {
   font-size: 10px;
   color: #676d60;
+}
+.source-pill {
+  font-style: normal;
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #e9f2fb;
+  color: #2f6c9e;
+  font-size: 9px;
+  font-weight: 600;
 }
 .track-end {
   grid-column: 2;
