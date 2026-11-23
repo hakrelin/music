@@ -152,8 +152,8 @@ func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
 		s.cfgMu.RLock()
 		resp["secretsFile"] = s.meta.SecretsPath
 		resp["secretsWritable"] = config.CheckWritable(s.meta.SecretsPath)
-		resp["configFiles"] = append([]string(nil), s.meta.ConfigFiles...)
-		resp["envOverrides"] = append([]string(nil), s.meta.EnvOverrides...)
+		resp["configFiles"] = append([]string{}, s.meta.ConfigFiles...)
+		resp["envOverrides"] = append([]string{}, s.meta.EnvOverrides...)
 		s.cfgMu.RUnlock()
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -296,8 +296,8 @@ func (s *Server) buildAdminConfigSnapshot() map[string]any {
 		"secretsFile":     meta.SecretsPath,
 		"secretsExists":   meta.SecretsExists,
 		"secretsWritable": config.CheckWritable(meta.SecretsPath),
-		"configFiles":     append([]string(nil), meta.ConfigFiles...),
-		"envOverrides":    append([]string(nil), meta.EnvOverrides...),
+		"configFiles":     append([]string{}, meta.ConfigFiles...),
+		"envOverrides":    append([]string{}, meta.EnvOverrides...),
 		"providerMode":    cfg.Provider,
 		"primaryProvider": primary,
 		"sources":         sources,
