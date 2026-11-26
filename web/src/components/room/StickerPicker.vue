@@ -101,14 +101,20 @@ defineExpose({ load });
     </p>
     <div v-else class="grid">
       <button
-        v-for="it in items"
+        v-for="(it, i) in items"
         :key="it.id"
         class="cell"
         type="button"
         :title="it.name"
         @click="emit('pick', it.id)"
       >
-        <img :src="stickerUrl(it.id)" :alt="it.name" loading="lazy" />
+        <!-- 前两行立即加载，后面的懒加载：表情包单个几百 KB，全部 eager 会拖慢手机流量 -->
+        <img
+          :src="stickerUrl(it.id)"
+          :alt="it.name"
+          :loading="i < 8 ? 'eager' : 'lazy'"
+          decoding="async"
+        />
         <span
           v-if="!it.builtin"
           class="del"
