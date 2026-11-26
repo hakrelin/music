@@ -128,8 +128,9 @@ defineExpose({ load });
   position: absolute;
   right: 12px;
   bottom: 78px;
-  width: 292px;
-  max-height: 320px;
+  /* 比之前宽一点、高一点：62px 的格子看不清表情细节 */
+  width: 344px;
+  max-height: min(420px, 56vh);
   display: flex;
   flex-direction: column;
   background: var(--card, #fff);
@@ -184,8 +185,8 @@ defineExpose({ load });
   grid-template-columns: repeat(4, minmax(0, 1fr));
   /* 固定行高而不是 aspect-ratio：老浏览器/WebView 里 aspect-ratio + 百分比高度会失效，
      导致图片按原始尺寸撑破格子（表现为表情互相叠在一起）。 */
-  grid-auto-rows: 64px;
-  gap: 6px;
+  grid-auto-rows: 76px;
+  gap: 7px;
   padding: 8px 2px 2px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -226,13 +227,17 @@ defineExpose({ load });
   color: #fff;
 }
 @media (max-width: 900px) {
+  /* 手机上贴着输入框上方展开，宽度跟着屏幕走，别挡住发送按钮 */
   .sticker-pop {
-    width: 260px;
+    width: min(320px, calc(100vw - 16px));
     right: 8px;
-    bottom: 72px;
+    bottom: 64px;
+    max-height: min(360px, 46vh);
+    padding: 8px;
   }
   .grid {
-    grid-auto-rows: 56px;
+    grid-auto-rows: 64px;
+    gap: 6px;
   }
 }
 </style>

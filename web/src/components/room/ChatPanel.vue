@@ -9,6 +9,17 @@ const box = ref<HTMLElement | null>(null);
 const unread = ref(false);
 const showStickers = ref(false);
 const stickerRef = ref<InstanceType<typeof StickerPicker> | null>(null);
+/** 输入框上方留出的高度：表情面板贴着它展开，避免盖住输入框 */
+const stickerBottom = ref(96);
+const composerRef = ref<HTMLElement | null>(null);
+function toggleStickers() {
+  if (!showStickers.value) {
+    // 面板底部 = 输入框高度 + 容器内边距(14) + 间隙(12)，保证不压住输入框
+    const h = composerRef.value?.offsetHeight ?? 84;
+    stickerBottom.value = h + 26;
+  }
+  showStickers.value = !showStickers.value;
+}
 function bottom() {
   if (box.value) {
     box.value.scrollTop = box.value.scrollHeight;
@@ -91,7 +102,7 @@ function color(name: string) {
     <button v-if="unread" class="unread" @click="bottom">
       有新消息 <Icon name="down" :size="12" />
     </button>
-    <form class="composer" @submit.prevent="send">
+    <form ref="composerRef" class="composer" @submit.prevent="send">
       <label class="visually-hidden" for="chat-draft">聊天消息</label
       ><textarea
         id="chat-draft"
@@ -109,7 +120,7 @@ function color(name: string) {
           :disabled="!room.joined"
           :aria-expanded="showStickers"
           aria-label="表情包"
-          @click="showStickers = !showStickers"
+          @click="toggleStickers"
         >
           <Icon name="smile" :size="15" />
         </button>
@@ -122,6 +133,7 @@ function color(name: string) {
     <StickerPicker
       v-if="showStickers"
       ref="stickerRef"
+      :style="{ bottom: stickerBottom + 'px' }"
       @pick="sendSticker"
       @close="showStickers = false"
     />
