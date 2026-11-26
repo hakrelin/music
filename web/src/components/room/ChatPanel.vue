@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from 'vue';
 import Icon from '@/components/Icon.vue';
+import StickerPicker from '@/components/room/StickerPicker.vue';
 import { useRoomStore } from '@/stores/room';
 const room = useRoomStore();
 const draft = ref('');
 const box = ref<HTMLElement | null>(null);
 const unread = ref(false);
+const showStickers = ref(false);
+const stickerRef = ref<InstanceType<typeof StickerPicker> | null>(null);
 function bottom() {
   if (box.value) {
     box.value.scrollTop = box.value.scrollHeight;
     unread.value = false;
   }
+}
+function sendSticker(id: string) {
+  room.chatSendSticker(id);
+  void nextTick(bottom);
 }
 watch(
   () => room.chat.length,
@@ -64,14 +71,19 @@ function color(name: string) {
                 new Date(m.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
               }}</time>
             </div>
-            <p class="bubble">{{ m.content }}</p>
+            <p v-if="m.content" class="bubble">{{ m.content }}</p>
             <a
               v-for="(img, k) in m.images || []"
               :key="k"
               :href="img"
               target="_blank"
               rel="noreferrer"
-              ><img :src="img" alt="聊天图片" class="chat-image" loading="lazy"
+              ><img
+                :src="img"
+                :alt="m.content ? '聊天图片' : '表情包'"
+                class="chat-image"
+                :class="{ sticker: !m.content }"
+                loading="lazy"
             /></a>
           </div></div
       ></template>
@@ -91,12 +103,28 @@ function color(name: string) {
         @keydown.enter.exact.prevent="send"
       />
       <div class="composer-bottom">
-        <span>Enter 发送 · Shift + Enter 换行</span
+        <button
+          class="sticker-btn"
+          type="button"
+          :disabled="!room.joined"
+          :aria-expanded="showStickers"
+          aria-label="表情包"
+          @click="showStickers = !showStickers"
+        >
+          <Icon name="smile" :size="15" />
+        </button>
+        <span class="hint-text">Enter 发送 · Shift + Enter 换行</span
         ><button :disabled="!room.joined || !draft.trim()" aria-label="发送消息">
           <Icon name="arrow" :size="16" />
         </button>
       </div>
     </form>
+    <StickerPicker
+      v-if="showStickers"
+      ref="stickerRef"
+      @pick="sendSticker"
+      @close="showStickers = false"
+    />
   </section>
 </template>
 <style scoped>
@@ -219,6 +247,13 @@ header .online-dot {
   object-fit: contain;
   border-radius: 8px;
 }
+/* 纯表情消息：不加气泡边距，缩到 150px 高，一屏能看下好几张 */
+.chat-image.sticker {
+  margin-top: 0;
+  max-height: 150px;
+  max-width: 150px;
+  background: transparent;
+}
 .composer {
   margin-top: 20px;
   border: 1px solid var(--line);
@@ -253,6 +288,20 @@ header .online-dot {
 .composer-bottom span {
   font-size: 10px;
   color: #646b60;
+}
+.composer-bottom .hint-text {
+  flex: 1;
+  text-align: center;
+}
+/* 表情包按钮：和发送按钮同一尺寸，但用浅色区分主次动作 */
+.composer-bottom .sticker-btn {
+  background: #eef1ea;
+  color: #4d5648;
+  width: 28px;
+}
+.composer-bottom .sticker-btn[aria-expanded='true'] {
+  background: #dfeacd;
+  color: #507448;
 }
 .composer-bottom button {
   height: 27px;

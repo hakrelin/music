@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/hakrelin/music/server/internal/provider/demo"
 	"github.com/hakrelin/music/server/internal/provider/netease"
 	"github.com/hakrelin/music/server/internal/storage"
+	"github.com/hakrelin/music/server/internal/stickers"
 )
 
 // version 可通过构建参数覆盖：-ldflags "-X main.version=1.2.3"。
@@ -98,6 +100,34 @@ func run() error {
 	cacheHolder := storage.NewHolder(rebuildCache(cfg))
 	defer cacheHolder.Close()
 
+	// 1.6) 聊天表情包库：落在 dataDir/stickers，导入即用，不占对象存储配额。
+	stickerStore, err := stickers.New(filepath.Join(cfg.DataDir, "stickers"))
+	if err != nil {
+		logger.Warn("表情包库初始化失败，本次只支持纯文字聊天", "err", err)
+		stickerStore = nil
+	} else {
+		logger.Info("表情包库已就绪", "dir", stickerStore.Dir(), "items", len(stickerStore.List()))
+		// 内置表情：编译进二进制，首次启动播种，之后每次启动做一次幂等补齐。
+		if added, err := stickerStore.SeedBuiltin(); err != nil {
+			logger.Warn("内置表情播种失败", "err", err)
+		} else if added > 0 {
+			logger.Info("内置表情已导入", "added", added, "total", len(stickerStore.List()))
+		}
+		if skipped := stickerStore.BuiltinSkipped(); len(skipped) > 0 {
+			logger.Warn("部分内置表情被跳过", "count", len(skipped), "first", skipped[0])
+		}
+	}
+	var stickerURL func(string) (string, bool)
+	if stickerStore != nil {
+		stickerURL = func(id string) (string, bool) {
+			item, ok := stickerStore.Get(id)
+			if !ok {
+				return "", false
+			}
+			return item.URL(), true
+		}
+	}
+
 	// 2) 房间 hub
 	idle := time.Duration(cfg.RoomIdleMinutes) * time.Minute
 	var onPlayed func(model.Track)
@@ -118,6 +148,7 @@ func run() error {
 		Logger:          logger,
 		OnTrackPlayed:   onPlayed,
 		FallbackURL:     fallbackURL,
+		StickerURL:      stickerURL,
 	})
 	h.StartBuiltinRooms()
 
@@ -135,6 +166,7 @@ func run() error {
 		Cache:        cacheHolder,
 		CacheResolve: cacheResolve,
 		RebuildCache: rebuildCache,
+		Stickers:     stickerStore,
 		Version:      version,
 		Logger:       logger,
 	})

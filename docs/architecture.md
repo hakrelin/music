@@ -102,6 +102,10 @@ music/
 | POST | `/api/rooms` | body `{name, desc, needPwd, password}` → `{id}`；校验：name 1–33 字，desc ≤133 |
 | POST | `/api/rooms/{id}/auth` | body `{password}` → `{ok:true}`；错误 403 |
 | GET | `/api/demo/audio/{id}.wav` | 仅 demo provider：程序合成音频（见 §7） |
+| GET | `/api/stickers` | `{items:[{id,name,mime,size,created,builtin?}]}`，内置表情排最前、其余按导入时间倒序；空库返回 `[]` |
+| GET | `/api/stickers/{id}` | 直接返回图片字节（`Cache-Control: immutable`），未知 ID 404 |
+| POST | `/api/stickers` | 导入表情包：裸图片字节（`Content-Type: image/*`，`?name=` 可选）或 `multipart/form-data` 的 `file` 字段；≤2MB，类型以服务端嗅探为准（PNG/JPEG/GIF/WebP），返回 `{ok, item, url}` |
+| DELETE | `/api/stickers/{id}` | 删除表情包，需要管理后台会话（`rootPassword` 登录后的 Cookie）；内置表情返回 409 `builtin` |
 
 错误统一：`{"error":{"code":"room_not_found","message":"房间不存在"}}` + 合适状态码。
 密码类错误不区分「无此房/密码错」，避免枚举。
@@ -117,6 +121,7 @@ music/
 {"t":"hello","nick":"游客1024","pwd":"房间密码或空"}
 {"t":"ping"}
 {"t":"chat","content":"晚上好"}
+{"t":"chat","sticker":"3f9c2a7b5d1e0c44"}                            // 发一张表情包：服务端按 ID 校验后把 URL 写进消息
 {"t":"pick","id":"1901371647","source":"wy","name":"夜雀の歌声"}   // 有 id 用 id，无 id 走搜索点歌
 {"t":"search","req":"q1","q":"东方","source":"wy","page":1,"size":10}
 {"t":"playlist.search","req":"q2","q":"东方","page":1,"size":10}
@@ -152,7 +157,7 @@ music/
 {"t":"presence","online":4}
 {"t":"queue","queue":["…Track…"]}                    // 队列任何变化都整包重发
 {"t":"current","track":{…Track…},"startedAt":1762339190000}
-{"t":"chat","msg":{…ChatMsg…}}
+{"t":"chat","msg":{…ChatMsg…}}                        // 表情消息：content="发了一张表情"，images=["/api/stickers/<id>"]
 {"t":"notice","content":"东方电台 已开始播放","level":"info"}
 {"t":"search","req":"q1","tracks":["…Track…"],"total":280}
 {"t":"playlist.search","req":"q2","playlists":["…Playlist…"],"total":12}

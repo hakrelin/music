@@ -28,6 +28,7 @@ import (
 	"github.com/hakrelin/music/server/internal/provider/demo"
 	"github.com/hakrelin/music/server/internal/provider/netease"
 	"github.com/hakrelin/music/server/internal/storage"
+	"github.com/hakrelin/music/server/internal/stickers"
 	"github.com/hakrelin/music/server/internal/webui"
 )
 
@@ -44,6 +45,7 @@ type Server struct {
 	cache        *storage.Holder
 	cacheResolve storage.Resolver
 	rebuildCache func(config.Config) *storage.Cache
+	stickers     *stickers.Store
 	version      string
 	log          *slog.Logger
 	static       fs.FS
@@ -66,6 +68,7 @@ type Options struct {
 	Cache        *storage.Holder
 	CacheResolve storage.Resolver
 	RebuildCache func(config.Config) *storage.Cache
+	Stickers     *stickers.Store
 	Version      string
 	Logger       *slog.Logger
 }
@@ -105,6 +108,7 @@ func New(opts Options) *Server {
 		cache:         opts.Cache,
 		cacheResolve:  opts.CacheResolve,
 		rebuildCache:  opts.RebuildCache,
+		stickers:      opts.Stickers,
 		version:       opts.Version,
 		log:           logger,
 		static:        webui.FS(),
@@ -129,6 +133,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stream/{id}", s.handleStream)
 	mux.HandleFunc("HEAD /api/stream/{id}", s.handleStream)
 	mux.HandleFunc("GET /api/cache/stats", s.handleCacheStats)
+
+	// 聊天表情包：列表/取图公开，导入开放，删除要管理员会话。
+	mux.HandleFunc("GET /api/stickers", s.handleStickerList)
+	mux.HandleFunc("GET /api/stickers/{id}", s.handleStickerFile)
+	mux.HandleFunc("POST /api/stickers", s.handleStickerUpload)
+	mux.HandleFunc("DELETE /api/stickers/{id}", s.requireAdmin(s.handleStickerDelete))
 
 	// 管理后台接口（root 口令登录 + Cookie 认证）。
 	s.registerAdminRoutes(mux)

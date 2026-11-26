@@ -141,6 +141,24 @@ func (c *Client) reply(code, msg, req string) {
 }
 
 func (c *Client) handleChat(m *inMsg) {
+	// 带 sticker 字段的是「发一张表情包」：ID 必须能在表情库里解析出来，
+	// 否则直接拒绝——不能让客户端自己塞任意图片 URL（那是 XSS/盗链入口）。
+	if id := strings.TrimSpace(m.Sticker); id != "" {
+		if c.hub.stickerURL == nil {
+			c.sendErrorCode("bad_request", "这个部署没有开启表情包", m.Req)
+			return
+		}
+		url, ok := c.hub.stickerURL(id)
+		if !ok {
+			c.sendErrorCode("bad_request", "表情包不存在", m.Req)
+			return
+		}
+		code, msg := c.room.chatSticker(c, url)
+		if code != "" {
+			c.sendErrorCode(code, msg, m.Req)
+		}
+		return
+	}
 	code, msg := c.room.chat(c, m.Content)
 	if code != "" {
 		c.sendErrorCode(code, msg, m.Req)

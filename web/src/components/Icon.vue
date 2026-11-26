@@ -51,6 +51,8 @@ const paths: Record<string, string> = {
   home: '<path d="m4.5 10.5 7.5-6 7.5 6V19h-5v-5.5h-5V19h-5v-8.5Z" stroke-linejoin="round"/>',
   tea: '<path d="M5.5 9.5h13v4.2a5.5 5.5 0 0 1-11 0V9.5Z" stroke-linejoin="round"/><path d="M18.5 10.8h1.4a2.4 2.4 0 1 1 0 4.8h-1.6" stroke-linecap="round"/><path d="M9.5 6.5 10 4.5m3.5 2 .5-2" stroke-linecap="round"/>',
   info: '<circle cx="12" cy="12" r="8.2"/><path d="M12 11v5.2" stroke-linecap="round"/><circle cx="12" cy="8" r="1" fill="currentColor" stroke="none"/>',
+  smile: '<circle cx="12" cy="12" r="8.2"/><path d="M8.6 14a3.9 3.9 0 0 0 6.8 0" stroke-linecap="round"/><circle cx="9.3" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="14.7" cy="10" r="1" fill="currentColor" stroke="none"/>',
+  image: '<rect x="4.5" y="5.5" width="15" height="13" rx="2.2"/><circle cx="9" cy="10" r="1.3"/><path d="m5.5 17 4.6-4.3 3 2.6 2.6-2.3 3 3" stroke-linejoin="round"/>',
 };
 
 const html = computed(() => paths[props.name] || '');

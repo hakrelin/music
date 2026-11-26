@@ -155,6 +155,7 @@ type inMsg struct {
 	Nick      string `json:"nick"`
 	Pwd       string `json:"pwd"`
 	Content   string `json:"content"`
+	Sticker   string `json:"sticker"` // 表情包 ID：非空时表示发一张贴图而不是文字
 	ID        string `json:"id"`
 	Source    string `json:"source"`
 	Name      string `json:"name"`

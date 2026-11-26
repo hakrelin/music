@@ -938,10 +938,29 @@ func (r *Room) chat(c *Client, content string) (string, string) {
 	if utf8.RuneCountInString(content) > 200 {
 		content = string([]rune(content)[:200])
 	}
+	return r.appendChat(c, content, nil)
+}
+
+// chatSticker 发一张表情包。url 由 hub 侧根据表情库 ID 解析得到，
+// 客户端无法自行指定，避免把聊天区变成任意图片外链。
+func (r *Room) chatSticker(c *Client, url string) (string, string) {
+	if r.isBlacklisted(c.session) {
+		return "banned", "你已被禁言"
+	}
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return "bad_request", "表情包地址为空"
+	}
+	return r.appendChat(c, "发了一张表情", []string{url})
+}
+
+// appendChat 统一处理历史裁剪与广播。
+func (r *Room) appendChat(c *Client, content string, images []string) (string, string) {
 	msg := model.ChatMsg{
 		Type:    "chat",
 		Nick:    c.nick,
 		Content: content,
+		Images:  images,
 		TS:      r.hub.Now(),
 		Session: c.session,
 	}

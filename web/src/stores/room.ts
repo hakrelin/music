@@ -298,6 +298,22 @@ export const useRoomStore = defineStore('room', {
       }
       this.socket?.send({ t: 'chat', content: text });
     },
+    /** 发一张表情包：服务端按 ID 校验并把图片地址写进消息，客户端不传 URL。 */
+    chatSendSticker(stickerId: string) {
+      const id = stickerId.trim();
+      if (!id) return;
+      if (this.mock) {
+        this.pushChat({
+          type: 'chat',
+          nick: this.nick,
+          content: '发了一张表情',
+          images: [`/api/stickers/${id}`],
+          ts: Date.now(),
+        });
+        return;
+      }
+      this.socket?.send({ t: 'chat', sticker: id });
+    },
     async pick(
       track: Pick<
         Track,
