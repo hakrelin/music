@@ -26,7 +26,8 @@ export function stickerUrl(id: string): string {
 }
 
 export async function listStickers(): Promise<Sticker[]> {
-  const data = await apiGet<StickerListResponse>('/api/stickers');
+  // apiGet 内部会补上 /api 前缀，这里只能传相对路径
+  const data = await apiGet<StickerListResponse>('/stickers');
   return data.items || [];
 }
 

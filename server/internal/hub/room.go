@@ -951,7 +951,8 @@ func (r *Room) chatSticker(c *Client, url string) (string, string) {
 	if url == "" {
 		return "bad_request", "表情包地址为空"
 	}
-	return r.appendChat(c, "发了一张表情", []string{url})
+	// 表情消息不带文字：前端据此隐藏气泡、把图片按贴图尺寸渲染。
+	return r.appendChat(c, "", []string{url})
 }
 
 // appendChat 统一处理历史裁剪与广播。

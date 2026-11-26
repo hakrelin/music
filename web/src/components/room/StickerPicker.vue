@@ -181,26 +181,36 @@ defineExpose({ load });
 }
 .grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* 固定行高而不是 aspect-ratio：老浏览器/WebView 里 aspect-ratio + 百分比高度会失效，
+     导致图片按原始尺寸撑破格子（表现为表情互相叠在一起）。 */
+  grid-auto-rows: 64px;
   gap: 6px;
-  padding-top: 8px;
-  overflow: auto;
+  padding: 8px 2px 2px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .cell {
   position: relative;
-  aspect-ratio: 1;
+  height: 100%;
+  min-height: 0;
+  padding: 2px;
   border-radius: 8px;
   background: #f5f6f2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
-  display: grid;
-  place-items: center;
 }
 .cell:hover {
   background: #eaf2e5;
 }
 .cell img {
-  width: 100%;
-  height: 100%;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
 }
 .del {
@@ -220,6 +230,9 @@ defineExpose({ load });
     width: 260px;
     right: 8px;
     bottom: 72px;
+  }
+  .grid {
+    grid-auto-rows: 56px;
   }
 }
 </style>

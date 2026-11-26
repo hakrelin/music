@@ -157,7 +157,7 @@ music/
 {"t":"presence","online":4}
 {"t":"queue","queue":["…Track…"]}                    // 队列任何变化都整包重发
 {"t":"current","track":{…Track…},"startedAt":1762339190000}
-{"t":"chat","msg":{…ChatMsg…}}                        // 表情消息：content="发了一张表情"，images=["/api/stickers/<id>"]
+{"t":"chat","msg":{…ChatMsg…}}                        // 表情消息：content=""，images=["/api/stickers/<id>"]，前端按贴图渲染
 {"t":"notice","content":"东方电台 已开始播放","level":"info"}
 {"t":"search","req":"q1","tracks":["…Track…"],"total":280}
 {"t":"playlist.search","req":"q2","playlists":["…Playlist…"],"total":12}
